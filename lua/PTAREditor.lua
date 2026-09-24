@@ -1,0 +1,346 @@
+-- /lua run PTAREditor
+-- Manual capture/editor only. No movement, door clicks, targeting, combat or TAC calls.
+local mq = require('mq')
+local imgui = require('ImGui')
+local core = require('PTARRouteData')
+local files = require('PTARFiles')
+local route,filename,selected,last_creation,last_capture
+local state,message='Unsaved','Create or load a route.'
+local file_draft={value='NewRoute'}
+local import_draft={value=''}
+local existing,existing_file={},nil
+local name_draft={value='New Route'}
+local description_draft={value=''}
+local capture={label='',notes='',radius='',drop_id='drop_1',landing='ground',manual_handoff=false}
+local action=1
+local running=true
+local edit={}; local route_edit={}; local delete_confirm_id=nil; local replace_confirm_id=nil
+local TYPES={'normal','door','drop_pre','drop_post','finish'}
+local ACTIONS={
+  {label='Add Waypoint',kind='normal',where='append'},
+  {label='Capture Door',kind='door',where='append'},
+  {label='Add Drop Pre',kind='drop_pre',where='append'},
+  {label='Add Drop Post',kind='drop_post',where='append'},
+  {label='Add Finish',kind='finish',where='append'},
+}
+for _,placement in ipairs({{where='before',label='Before'},{where='after',label='After'}}) do
+  for _,kind in ipairs(TYPES) do
+    local name=({normal='Waypoint',door='Door',drop_pre='Drop Pre',drop_post='Drop Post',finish='Finish'})[kind]
+    ACTIONS[#ACTIONS+1]={label='Insert '..name..' '..placement.label,kind=kind,where=placement.where}
+  end
+end
+local function set_message(s) message=tostring(s or '') end
+local function safe_filename(name)
+  local generated,err=files.filename(name)
+  if not generated then return nil,err end
+  return mq.configDir..'/'..generated
+end
+local function refresh_routes()
+  local found,err=files.scan(mq.configDir)
+  if not found then set_message('Route scan failed: '..tostring(err)); return end
+  existing=found
+  local present=false
+  for _,entry in ipairs(existing) do if entry.file==existing_file then present=true end end
+  if not present then existing_file=existing[1] and existing[1].file or nil end
+end
+local function current_zone()
+  local ok,z=pcall(function() return mq.TLO.Zone.ShortName() end)
+  return ok and z or nil
+end
+local function position()
+  local ok,p=pcall(function()
+    return {x=tonumber(mq.TLO.Me.X()),y=tonumber(mq.TLO.Me.Y()),z=tonumber(mq.TLO.Me.Z()),heading=tonumber(mq.TLO.Me.Heading.Degrees())}
+  end)
+  return ok and p or nil
+end
+local function zone_ok()
+  if not route then set_message('Create or load a route first'); return false end
+  local zone=current_zone()
+  if not zone or zone~=route.zone_short_name then
+    set_message('Capture blocked: current zone '..tostring(zone)..' differs from route '..route.zone_short_name); return false end
+  return true
+end
+local function candidate_door()
+  local ok,d=pcall(function()
+    local t=mq.TLO.DoorTarget
+    return {id=tonumber(t.ID()),name=t.Name(),x=tonumber(t.X()),y=tonumber(t.Y()),z=tonumber(t.Z()),distance=tonumber(t.Distance3D())}
+  end)
+  if not ok or not d or not d.id or d.id%1~=0 or type(d.name)~='string' or d.name=='' or not d.x or not d.y or not d.z then return nil end
+  return d
+end
+local function selected_wp()
+  if not route or not selected then return nil end
+  for i,w in ipairs(route.waypoints) do if w.id==selected then return w,i end end
+end
+local function sync_edit(w)
+  edit={label=w.label or '',type=w.type or 'normal',notes=w.notes or '',radius=w.radius and tostring(w.radius) or '',manual_handoff=w.manual_handoff or false,
+    drop_id=w.drop_id or '',landing=w.landing or 'ground',door_id=w.door and tostring(w.door.id) or '',door_name=w.door and w.door.name or '',
+    door_x=w.door and tostring(w.door.x) or '',door_y=w.door and tostring(w.door.y) or '',door_z=w.door and tostring(w.door.z) or ''}
+end
+local function select(w)
+  local id=w and w.id or nil
+  if selected==id then return end
+  selected=id; delete_confirm_id=nil; replace_confirm_id=nil
+  if w then sync_edit(w) end
+end
+local function saved()
+  if not route or not filename then state='Unsaved'; return end
+  local ok,e=core.save(route,filename)
+  if ok then
+    local registered,reg_error=files.add(mq.configDir,filename:match('[^/\\]+$'))
+    if not registered then state='Saved (not listed)'; set_message('Route saved, but could not add it to the route list: '..tostring(reg_error)); return end
+    state='Saved '..os.date('%H:%M:%S'); local _,warnings=core.validate(route)
+    set_message(#warnings>0 and ('Saved. Warnings: '..table.concat(warnings,'; ')) or 'Saved.')
+  else state='Save failed'; set_message('Save failed: '..tostring(e)) end
+end
+local function parse_radius(text,required)
+  if text=='' then if required then return nil,'Finish radius is required' end; return nil end
+  local r=tonumber(text); if not r or r<=0 or r==math.huge or r~=r then return nil,'Radius must be a positive number' end
+  return r
+end
+local function prepared_fields(draft,kind)
+  local radius,e=parse_radius(draft.radius or '',kind=='finish'); if e then return nil,e end
+  local fields={label=draft.label,type=kind,notes=draft.notes,radius=radius,drop_id=draft.drop_id,landing=draft.landing,manual_handoff=draft.manual_handoff}
+  if kind=='door' then
+    local d=candidate_door(); if not d then return nil,'Select a door with /doortarget before capture' end
+    fields.door={id=d.id,name=d.name,x=d.x,y=d.y,z=d.z}
+  end
+  return fields
+end
+local function capture_waypoint()
+  local chosen=ACTIONS[action]
+  local where=chosen.where
+  if not zone_ok() then return end
+  local w,index=selected_wp()
+  if where~='append' and not w then set_message('Select a waypoint for Insert Before/After'); return end
+  local p=position(); if not p then set_message('Could not read character position and heading'); return end
+  local fields,e=prepared_fields(capture,chosen.kind); if not fields then set_message(e); return end
+  local now=mq.gettime()
+  local created,where_or_error=core.create(route,where,index,fields,p,now,last_capture)
+  if not created then set_message(where_or_error); return end
+  last_creation=created.id; last_capture={time=now,x=created.x,y=created.y,z=created.z}
+  select(created); saved()
+  capture={label='',notes='',radius='',drop_id='drop_1',landing='ground',manual_handoff=false}; action=1
+  if state:match('^Saved') then set_message('Captured '..created.id..' - '..created.label) end
+end
+local function do_new()
+  if route and not state:match('^Saved') then set_message('Current route is unsaved; fix/save it before switching routes'); return end
+  local path,e=safe_filename(file_draft.value); if not path then set_message(e); return end
+  if core.exists(path) or core.exists(path..'.tmp') or core.exists(path..'.bak') then set_message('File already exists; choose another filename or Load Route'); return end
+  local zone=current_zone(); if not zone or zone=='' then set_message('Cannot read current zone'); return end
+  route=core.new(name_draft.value,zone,description_draft.value); filename=path; last_creation=nil; last_capture=nil; select(nil)
+  route_edit={name=route.route_name,description=route.description}; saved()
+  refresh_routes(); existing_file=path:match('[^/\\]+$')
+  set_message('Created route in zone '..zone..'. '..message)
+end
+local function do_load()
+  if route and not state:match('^Saved') then set_message('Current route is unsaved; fix/save it before switching routes'); return end
+  if not existing_file then set_message('Select an existing route'); return end
+  local path=mq.configDir..'/'..existing_file
+  if not core.exists(path) and not core.exists(path..'.tmp') and not core.exists(path..'.bak') then set_message('Route file not found'); return end
+  local loaded,notice=core.recover(path); if not loaded then set_message(notice); return end
+  route=loaded; filename=path; last_creation=nil; last_capture=nil; select(nil)
+  route_edit={name=route.route_name,description=route.description or ''}
+  state=notice and 'Recovered' or 'Saved (loaded)'; set_message(notice or 'Route loaded.')
+end
+local function commit_route_edit()
+  if not route then return end
+  route.route_name=route_edit.name; route.description=route_edit.description; saved()
+end
+local function apply_metadata()
+  local w=selected_wp(); if not w then return end
+  local radius,e=parse_radius(edit.radius,edit.type=='finish'); if e then set_message(e); return end
+  local old_type=w.type
+  w.label=edit.label; w.type=edit.type; w.notes=edit.notes; w.radius=radius
+  if edit.type=='drop_pre' or edit.type=='drop_post' then w.drop_id=edit.drop_id else w.drop_id=nil end
+  w.landing=edit.type=='drop_pre' and edit.landing or nil
+  w.manual_handoff=edit.type=='normal' and (edit.manual_handoff and true or nil) or nil
+  if edit.type=='door' then
+    local d={id=tonumber(edit.door_id),name=edit.door_name,x=tonumber(edit.door_x),y=tonumber(edit.door_y),z=tonumber(edit.door_z)}
+    if not d.id or d.id%1~=0 or not d.name or d.name=='' or not d.x or not d.y or not d.z then
+      set_message('Door requires ID, name, X, Y, Z'); return end
+    w.door=d
+  else w.door=nil end
+  if old_type~=edit.type then set_message('Type changed; checking required metadata') end
+  saved()
+end
+local function text_input(label,obj,key)
+  obj[key]=imgui.InputText(label,obj[key] or '')
+end
+local function type_combo(id,obj)
+  if imgui.BeginCombo(id,obj.type or 'normal') then
+    for _,kind in ipairs(TYPES) do
+      if imgui.Selectable(kind,obj.type==kind) then obj.type=kind end
+    end
+    imgui.EndCombo()
+  end
+end
+local function landing_combo(id,obj)
+  if imgui.BeginCombo(id,obj.landing or 'ground') then
+    for _,landing in ipairs({'ground','water'}) do
+      if imgui.Selectable(landing,obj.landing==landing) then obj.landing=landing end
+    end
+    imgui.EndCombo()
+  end
+end
+local function handoff_combo(id,obj)
+  if imgui.BeginCombo(id,obj.manual_handoff and 'Manual handoff' or 'Continue route') then
+    if imgui.Selectable('Continue route',not obj.manual_handoff) then obj.manual_handoff=false end
+    if imgui.Selectable('Manual handoff',obj.manual_handoff) then obj.manual_handoff=true end
+    imgui.EndCombo()
+  end
+end
+local function unmatched_drop_combo()
+  local pre,post={},{}
+  for _,w in ipairs(route.waypoints) do
+    if w.type=='drop_pre' then pre[w.drop_id]=(pre[w.drop_id] or 0)+1
+    elseif w.type=='drop_post' then post[w.drop_id]=(post[w.drop_id] or 0)+1 end
+  end
+  if imgui.BeginCombo('Unmatched Pre IDs',capture.drop_id or '') then
+    local options={}; for id,count in pairs(pre) do if count>(post[id] or 0) then options[#options+1]=id end end
+    table.sort(options)
+    for _,id in ipairs(options) do if imgui.Selectable(id,capture.drop_id==id) then capture.drop_id=id end end
+    imgui.EndCombo()
+  end
+end
+local function draw()
+  imgui.SetNextWindowSize(ImVec2(760,620),ImGuiCond.FirstUseEver)
+  imgui.SetNextWindowPos(ImVec2(55,55),ImGuiCond.FirstUseEver)
+  local open,visible=imgui.Begin('Project Triune AutoRoute Editor v0.2-test5###Project Triune AutoRoute Editor',true)
+  if open==false then running=false end
+  if visible then
+    if imgui.Button('Close Editor') then running=false end
+    text_input('New route filename (PTAR_ added)',file_draft,'value')
+    if imgui.Button('New Route') then do_new() end
+    text_input('Add existing route filename',import_draft,'value')
+    if imgui.Button('Add Existing Route') then
+      local name,err=files.filename(import_draft.value)
+      if not name then set_message(err)
+      else
+        local ok,reason=files.add(mq.configDir,name)
+        if ok then refresh_routes(); existing_file=name; set_message('Added '..name..' to route list.')
+        else set_message(reason) end
+      end
+    end
+    if imgui.BeginCombo('Existing route',existing_file or '(none)') then
+      for _,entry in ipairs(existing) do
+        if imgui.Selectable(entry.label..'##'..entry.file,existing_file==entry.file) then existing_file=entry.file end
+      end
+      imgui.EndCombo()
+    end
+    if imgui.Button('Refresh Routes') then refresh_routes() end
+    imgui.SameLine(); if imgui.Button('Load Route') then do_load() end
+    imgui.SameLine(); if imgui.Button('Save') then saved() end
+    imgui.Text('Status: '..state)
+    imgui.TextWrapped(message)
+    if route then
+      imgui.Separator()
+      imgui.Text('Loaded: '..(filename or '')..' | Zone: '..route.zone_short_name..' | Here: '..tostring(current_zone()))
+      text_input('Route name',route_edit,'name')
+      text_input('Description',route_edit,'description')
+      if imgui.Button('Commit Route Details') then commit_route_edit() end
+      imgui.Separator()
+      imgui.Text('New waypoint (capture at current character position)')
+      if imgui.BeginCombo('Action##capture',ACTIONS[action].label) then
+        for i,choice in ipairs(ACTIONS) do
+          if imgui.Selectable(choice.label,action==i) then action=i end
+        end
+        imgui.EndCombo()
+      end
+      local kind=ACTIONS[action].kind
+      text_input('Label##capture',capture,'label')
+      text_input('Notes##capture',capture,'notes'); text_input('Radius##capture',capture,'radius')
+      if kind=='normal' then handoff_combo('After waypoint##capture',capture) end
+      if kind=='drop_pre' or kind=='drop_post' then
+        text_input('Drop ID##capture',capture,'drop_id')
+        if kind=='drop_pre' then landing_combo('Landing##capture',capture) end
+        if kind=='drop_post' then unmatched_drop_combo() end
+      end
+      if kind=='door' then
+        if imgui.Button('Select Nearest Door') then
+          mq.cmd('/doortarget clear')
+          mq.cmd('/doortarget')
+          set_message('Nearest door requested. Verify the door target below before capture.')
+        end
+        local d=candidate_door()
+        if d then imgui.Text(string.format('Door target: %s | ID %d | distance %.1f | X %.3f Y %.3f Z %.3f',d.name,d.id,d.distance or -1,d.x,d.y,d.z))
+        else imgui.Text('No valid door target. Select Nearest Door or choose a door with /doortarget id <number>.') end
+      end
+      if imgui.Button('Capture Selected Action') then capture_waypoint() end
+      imgui.Separator(); imgui.Text('Route order (click to select)')
+      local here=position()
+      for i,w in ipairs(route.waypoints) do
+        local previous=route.waypoints[i-1]
+        local delta=core.distance(w,previous)
+        local row=string.format('#%d | %s | %s | %s | X %.3f Y %.3f Z %.3f%s',i,w.id,w.label,w.type,w.x,w.y,w.z,delta and string.format(' | from previous %.1f',delta) or '')
+        if imgui.Selectable(row..'##'..w.id,selected==w.id) then select(w) end
+      end
+      local w,index=selected_wp()
+      if w then
+        imgui.Separator()
+        local distance=core.distance(w,here)
+        imgui.Text(string.format('Selected: #%d %s | distance from you: %s',index,w.id,distance and string.format('%.1f',distance) or 'unknown'))
+        text_input('Label##edit',edit,'label'); type_combo('Type##edit',edit)
+        text_input('Notes##edit',edit,'notes'); text_input('Radius##edit',edit,'radius')
+        if edit.type=='normal' then handoff_combo('After waypoint##edit',edit) end
+        if edit.type=='drop_pre' or edit.type=='drop_post' then text_input('Drop ID##edit',edit,'drop_id') end
+        if edit.type=='drop_pre' then landing_combo('Landing##edit',edit) end
+        if edit.type=='door' then
+          text_input('Door ID',edit,'door_id'); text_input('Door name',edit,'door_name')
+          text_input('Door X',edit,'door_x'); text_input('Door Y',edit,'door_y'); text_input('Door Z',edit,'door_z')
+          local d=candidate_door()
+          if d then imgui.Text(string.format('Current /doortarget: %s (%d)',d.name,d.id))
+            if imgui.Button('Use Current Door Target') then
+              edit.door_id=tostring(d.id); edit.door_name=d.name
+              edit.door_x=tostring(d.x); edit.door_y=tostring(d.y); edit.door_z=tostring(d.z)
+            end
+          end
+        end
+        if imgui.Button('Edit Metadata (Commit)') then apply_metadata() end
+        if imgui.Button('Replace Position') then
+          if zone_ok() then replace_confirm_id=w.id; delete_confirm_id=nil end
+        end
+        if replace_confirm_id==w.id then
+          local p=position(); local dist=core.distance(w,p)
+          imgui.Text('Old to current position: '..(dist and string.format('%.2f',dist) or 'unavailable'))
+          if imgui.Button('Confirm Replace Position') then
+            if zone_ok() then
+              local ok,e=core.replace_position(w,position()); if ok then saved() else set_message(e) end
+            end; replace_confirm_id=nil
+          end
+          imgui.SameLine(); if imgui.Button('Cancel Replace') then replace_confirm_id=nil end
+        end
+        if imgui.Button('Move Up') then local j,e=core.move(route,w.id,-1); if j then saved() else set_message(e) end end
+        imgui.SameLine(); if imgui.Button('Move Down') then local j,e=core.move(route,w.id,1); if j then saved() else set_message(e) end end
+        if imgui.Button('Delete Selected') then delete_confirm_id=w.id; replace_confirm_id=nil end
+        if delete_confirm_id==w.id then
+          imgui.Text('Delete '..w.id..' - '..w.label..'?')
+          if imgui.Button('Confirm Delete') then
+            core.remove(route,w.id); if last_creation==w.id then last_creation=nil end
+            select(nil); saved()
+          end
+          imgui.SameLine(); if imgui.Button('Cancel Delete') then delete_confirm_id=nil end
+        end
+      end
+      if last_creation then
+        if imgui.Button('Undo Last Creation') then
+          local ok,e=core.remove(route,last_creation)
+          if ok then if selected==last_creation then select(nil) end; last_creation=nil; saved()
+          else last_creation=nil; set_message(e) end
+        end
+      end
+      local errors,warnings=core.validate(route)
+      for _,s in ipairs(errors) do imgui.TextWrapped('ERROR: '..s) end
+      for _,s in ipairs(warnings) do imgui.TextWrapped('Warning: '..s) end
+    else
+      imgui.Separator()
+      text_input('New route name',name_draft,'value')
+      text_input('New route description',description_draft,'value')
+    end
+  end
+  imgui.End()
+end
+refresh_routes()
+mq.imgui.init('PTAREditor',draw)
+while running do mq.delay(100) end
+mq.imgui.destroy('PTAREditor')
