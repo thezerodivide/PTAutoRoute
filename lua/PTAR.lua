@@ -7,6 +7,8 @@ local files=require('PTAR.PTARFiles')
 local logger=require('PTAR.PTARLog')
 local combat=require('PTAR.PTARCombat')
 local path_setup=require('PTAR.PTARPaths')
+local version=require('PTAR.PTARVersion')
+local settings_mod=require('PTAR.PTARSettings')
 local running=true
 local filename=nil
 local choices={}
@@ -21,7 +23,8 @@ local paths,path_error=path_setup.prepare(mq.configDir)
 if not paths then error('PTAR file migration stopped: '..tostring(path_error)) end
 local logs_moved,log_conflicts=path_setup.migrate_logs(paths)
 if not logs_moved then error('PTAR log migration stopped: '..tostring(log_conflicts)) end
-local diag=logger.new(paths.logs,identity,mq.gettime)
+local function echo_fn(message) mq.print(message) end
+local diag=logger.new(paths.logs,identity,mq.gettime,version.VERSION,echo_fn)
 
 local function log(message)
   diag:event(message)
@@ -174,11 +177,12 @@ local function load_route()
   notice='Loaded '..route.route_name..' ('..#route.waypoints..' waypoints). Log: '..diag:path()
   log('Loaded '..path..' with '..#route.waypoints..' waypoints')
   diag:debug('Route load snapshot: '..snapshot())
+  settings_mod.save(paths.config,identity,{last_route=filename,echo_enabled=diag.echo})
 end
 local function draw()
   imgui.SetNextWindowSize(ImVec2(520,350),ImGuiCond.FirstUseEver)
   imgui.SetNextWindowPos(ImVec2(55,55),ImGuiCond.FirstUseEver)
-  local open,visible=imgui.Begin('Project Triune AutoRoute v0.2.0-test.19###Project Triune AutoRoute',true)
+  local open,visible=imgui.Begin('Project Triune AutoRoute v'..version.VERSION..'###Project Triune AutoRoute',true)
   if open==false then running=false end
   if visible then
     if imgui.Button('Close Runner') then running=false end
@@ -199,8 +203,9 @@ local function draw()
       else refresh_routes(); load_route() end
     end
     imgui.SameLine(); if imgui.Button('New / Edit Route') then mq.cmd('/lua run PTAR/PTAREditor') end
-    if imgui.Button(diag.verbose and 'Verbose Debug: ON' or 'Verbose Debug: OFF') then
-      diag:set_verbose(not diag.verbose,snapshot)
+    if imgui.Button(diag.echo and 'MQ Console Echo: ON' or 'MQ Console Echo: OFF') then
+      diag:set_echo(not diag.echo,snapshot)
+      settings_mod.save(paths.config,identity,{last_route=filename,echo_enabled=diag.echo})
     end
     imgui.TextWrapped(notice)
     if runner then
@@ -229,17 +234,21 @@ local function draw()
   imgui.End()
 end
 
+local settings=settings_mod.read(paths.config,identity)
+if settings.last_route then filename=settings.last_route end
+local echo_default=settings.echo_enabled
+if echo_default==nil then echo_default=version.is_test() end
+diag:set_echo(echo_default,snapshot)
 refresh_routes()
 if filename then load_route() end
-diag:set_verbose(true,snapshot)
-log('AutoRoute session started; verbose default ON (test build); log '..diag:path())
+log('AutoRoute session started (build '..version.VERSION..'); log '..diag:path())
 mq.imgui.init('PTAutoRoute',draw)
 local next_snapshot=0
 while running do
   local ok,err=pcall(function()
     local now=mq.gettime()
     if runner then runner:tick(now) end
-    if diag.verbose and now>=next_snapshot then
+    if now>=next_snapshot then
       next_snapshot=now+1000; diag:debug('TICK '..snapshot())
     end
   end)

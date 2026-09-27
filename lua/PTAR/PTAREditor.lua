@@ -5,6 +5,7 @@ local imgui = require('ImGui')
 local core = require('PTAR.PTARRouteData')
 local files = require('PTAR.PTARFiles')
 local path_setup=require('PTAR.PTARPaths')
+local version=require('PTAR.PTARVersion')
 local paths,path_error=path_setup.prepare(mq.configDir)
 if not paths then error('PTAR file migration stopped: '..tostring(path_error)) end
 local route,filename,selected,last_creation,last_capture
@@ -275,7 +276,7 @@ end
 local function draw()
   imgui.SetNextWindowSize(ImVec2(760,620),ImGuiCond.FirstUseEver)
   imgui.SetNextWindowPos(ImVec2(55,55),ImGuiCond.FirstUseEver)
-  local open,visible=imgui.Begin('Project Triune AutoRoute Editor v0.2.0-test.19###Project Triune AutoRoute Editor',true)
+  local open,visible=imgui.Begin('Project Triune AutoRoute Editor v'..version.VERSION..'###Project Triune AutoRoute Editor',true)
   if open==false then running=false end
   if visible then
     if imgui.Button('Close Editor') then running=false end

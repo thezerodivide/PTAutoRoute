@@ -1,14 +1,13 @@
 local M={}
 local function safe(s) return tostring(s or 'unknown'):gsub('[^%w_%-]','_') end
-function M.new(dir,identity,clock)
-  local self={verbose=false}
+function M.new(dir,identity,clock,version,echo_fn)
+  local self={echo=false}
   function self:filename()
     local server,char=identity()
     return 'PTAR_'..safe(server)..'_'..safe(char)..'.log'
   end
   function self:path() return dir..'/'..self:filename() end
   function self:write(level,message)
-    if level=='DEBUG' and not self.verbose then return end
     local path=self:path()
     local previous=io.open(path,'rb')
     if previous then
@@ -18,15 +17,16 @@ function M.new(dir,identity,clock)
     local f=io.open(path,'a')
     if not f then return end
     local now=clock()
-    f:write(string.format('%s.%03d +%dms | %-5s | %s\n',os.date('%Y-%m-%d %H:%M:%S'),now%1000,now,level,tostring(message)))
+    f:write(string.format('%s.%03d +%dms | %s | %-5s | %s\n',os.date('%Y-%m-%d %H:%M:%S'),now%1000,now,version,level,tostring(message)))
     f:close()
+    if level=='DEBUG' and self.echo and echo_fn then pcall(echo_fn,message) end
   end
   function self:event(message) self:write('EVENT',message) end
   function self:debug(message) self:write('DEBUG',message) end
-  function self:set_verbose(enabled,snapshot)
-    self.verbose=enabled and true or false
-    self:event('Verbose Debug '..(self.verbose and 'ON' or 'OFF'))
-    if self.verbose and snapshot then self:debug('Enable snapshot: '..snapshot()) end
+  function self:set_echo(enabled,snapshot)
+    self.echo=enabled and true or false
+    self:event('MQ Console Echo '..(self.echo and 'ON' or 'OFF'))
+    if self.echo and snapshot then self:debug('Enable snapshot: '..snapshot()) end
   end
   return self
 end

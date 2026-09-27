@@ -63,7 +63,9 @@ If new evidence contradicts the current design, stop and explain the conflict be
 - **PTARFiles.lua** — the route index (`PTAR_Routes.txt`), filename validation/sanitization, scanning/listing available routes, atomic index add.
 - **PTARPaths.lua** — resolves MacroQuest config/log directories and performs the one-time, conservative migration of legacy route/log files into the dedicated subfolder (currently still named `PTAutorunner` — spec Section 14 flags this as a legacy name pending rename). Never overwrites a destination file; surfaces conflicts instead.
 - **PTARCombat.lua** — reads combat/XTarget signals from `mq.TLO.Me`, isolated so the "am I in combat" decision logic can be reasoned about separately from the rest of the adapter.
-- **PTARLog.lua** — file logger (`PTAR_<server>_<character>.log`), always-on EVENT level plus a toggleable DEBUG level, with size-based rotation to `.old`.
+- **PTARLog.lua** — file logger (`PTAR_<server>_<character>.log`), size-based rotation to `.old`. Every line is stamped with the running build's version. File logging always writes both EVENT and DEBUG levels unconditionally (no toggle reduces it); a separate `echo` flag controls only whether DEBUG lines are also mirrored to the in-game MQ console via an injected `echo_fn`, keeping this module MQ-free.
+- **PTARVersion.lua** — the single authoritative version string (`VERSION`) and `is_test()` (derived from a `-test.` pre-release segment), required by `PTAR.lua`, `PTAREditor.lua`, and `PTARLog.lua` so the version can't drift between window titles and log lines.
+- **PTARSettings.lua** — per-server/character runtime preferences (last-used route, MQ-console-echo preference), plain `key=value` text with the same atomic tmp/bak/promote save pattern as `PTARFiles.lua`'s route index. Runner-only; the Editor doesn't read or write it.
 - **PTAREditor.lua** — the separate Editor process/UI for capturing routes waypoint-by-waypoint at the character's live position. Capture-only by design: never moves the character, clicks doors, targets, or fights.
 
 ### Key design invariants (do not casually violate)
