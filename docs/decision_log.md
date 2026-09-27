@@ -70,7 +70,7 @@ Entries are ordered oldest first. New entries append at the bottom.
 
 ### DL-004 — Rename the PTAutorunner folder
 
-- **Status:** Implemented together with DL-005 in the same pass (developer chose to combine them, since both touch `PTARPaths.lua`'s `M.prepare` and doing them separately would mean building migration code for the rename just before deleting all migration code in DL-005). Pending live verification.
+- **Status:** Implemented together with DL-005 in the same pass (developer chose to combine them, since both touch `PTARPaths.lua`'s `M.prepare` and doing them separately would mean building migration code for the rename just before deleting all migration code in DL-005). **Live-verified, PASS**, 2026-09-27, against `v0.2.0-test.21`.
 - **Decision:** Rename the `PTAutorunner` config/logs subfolder to `PTAR` — chosen over alternatives like `PTAutoRoute` specifically to match every other naming convention already in this project (module names, route files `PTAR_*.lua`, logs `PTAR_*.log`), to prevent user confusion between multiple similar-but-different names.
 - **Why / evidence:** `PTAutorunner` is a legacy name (spec §14). The config/logs separation pattern itself (`macroquest/config/<name>` vs `macroquest/logs/<name>`) is confirmed correct and matches Development Protocol §8 — only the specific name needs to change, not the separation pattern.
 - **No migration code written for the rename itself:** the developer confirmed there are no other live installs/characters with data still under the old `PTAutorunner` name — their own existing local data was manually backed up (zipped) for manual transfer to the new `PTAR` folder. Given DL-005 removes all relocation machinery in this same pass, writing one-off migration code for the rename just to delete it moments later would be pure waste.
@@ -82,7 +82,7 @@ Entries are ordered oldest first. New entries append at the bottom.
 
 ### DL-005 — Remove route/log file relocation-on-launch behavior before release
 
-- **Status:** Implemented together with DL-004 (see above), pending live verification.
+- **Status:** Implemented together with DL-004 (see above). **Live-verified, PASS**, 2026-09-27, against `v0.2.0-test.21`.
 - **Decision:** The automatic relocation of legacy route and log files from the MacroQuest config root into the dedicated subfolder, performed on every launch, stays active during testing but must be removed before release.
 - **Why / evidence:** This is relocation-only behavior — never a schema edit — kept deliberately during the testing period to smooth the folder-layout transition (spec §3). It is not meant to be permanent, so its removal is tracked here rather than left to be forgotten once testing ends.
 - **Confirmed safe to remove now:** developer confirmed there are no other installs/characters still holding un-migrated legacy files in the raw MacroQuest config root that this code was protecting.
