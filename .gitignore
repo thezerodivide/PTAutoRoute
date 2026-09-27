@@ -1,0 +1,5 @@
+# Live user data (captured routes, logs, index), auto-relocated by the app at runtime
+config/PTAutoRunner/
+
+# Windows folder metadata
+desktop.ini

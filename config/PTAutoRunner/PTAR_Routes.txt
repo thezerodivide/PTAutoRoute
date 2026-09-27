@@ -1,2 +1,0 @@
-PTAR_SleepersTombKera.lua
-PTAR_EasternWastestoSleepersTomb.lua
