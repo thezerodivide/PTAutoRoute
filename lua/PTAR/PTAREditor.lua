@@ -275,7 +275,7 @@ end
 local function draw()
   imgui.SetNextWindowSize(ImVec2(760,620),ImGuiCond.FirstUseEver)
   imgui.SetNextWindowPos(ImVec2(55,55),ImGuiCond.FirstUseEver)
-  local open,visible=imgui.Begin('Project Triune AutoRoute Editor v0.2.0-test.18###Project Triune AutoRoute Editor',true)
+  local open,visible=imgui.Begin('Project Triune AutoRoute Editor v0.2.0-test.19###Project Triune AutoRoute Editor',true)
   if open==false then running=false end
   if visible then
     if imgui.Button('Close Editor') then running=false end
