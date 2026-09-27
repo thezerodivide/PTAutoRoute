@@ -39,6 +39,11 @@ function M.new(route,io,opts)
   local function fail(reason)
     halt(); self.index=nil; say('Error',reason..' Use Resume (nearest valid waypoint) or Stop.')
   end
+  local function traversal_blocked()
+    if not TRAVERSAL_PHASES[self.phase] then return false end
+    say(self.status,'Start/Resume blocked: still in traversal phase '..self.phase..'. Verify character position, then Stop before restarting.')
+    return true
+  end
   local function leg_detail(reason)
     local to=waypoints[self.index]
     local from=self.last_good and waypoints[self.last_good]
@@ -173,10 +178,7 @@ function M.new(route,io,opts)
     return best
   end
   function self:start(index,now)
-    if TRAVERSAL_PHASES[self.phase] then
-      say(self.status,'Start/Resume blocked: still in traversal phase '..self.phase..'. Verify character position, then Stop before restarting.')
-      return
-    end
+    if traversal_blocked() then return end
     halt()
     if not waypoints[index] then fail('Invalid waypoint selection'); return end
     if io.zone()~=route.zone_short_name then fail('Wrong zone: expected '..route.zone_short_name); return end
@@ -185,6 +187,7 @@ function M.new(route,io,opts)
     navigate(now)
   end
   function self:start_nearest(now)
+    if traversal_blocked() then return end
     local i,err=self:nearest()
     if not i then fail(err); return end
     self:start(i,now)
@@ -234,14 +237,18 @@ function M.new(route,io,opts)
         elseif not io.mesh() or not io.path(back) then fail('Could not return to previous known good waypoint')
         else io.nav(back); self.phase='backtrack'; self.started=now
           say('Recovering','Returning to # '..self.last_good..' '..back.label..' after combat') end
+      elseif returning=='ground_exit' then
+        local exit=w.exit
+        if dist(p,exit)<=exit.radius then
+          io.nav_stop(); self.attempt=0; self.backtracked=false; advance(now)
+        elseif not io.mesh() or not io.path(exit) then fail('No navigable path from ground landing to '..w.label..' exit')
+        else io.nav(exit); self.phase='ground_exit'; self.started=now; self.progress_at=now; self.best=dist(p,exit)
+          say('Running','Navigating to dry exit of '..w.label..' after combat') end
       else navigate(now) end
       return
     end
-    if self.phase=='ground_exit' and io.combat() then
-      fail('Combat began while navigating from ground landing to '..w.label..' exit'); return
-    end
-    if io.combat() and (self.phase=='nav' or self.phase=='backtrack' or self.phase=='door') then
-      local returning=self.phase=='backtrack' and 'backtrack' or 'nav'
+    if io.combat() and (self.phase=='nav' or self.phase=='backtrack' or self.phase=='door' or self.phase=='ground_exit') then
+      local returning=self.phase=='backtrack' and 'backtrack' or (self.phase=='ground_exit' and 'ground_exit' or 'nav')
       halt(); self.phase='combat'; self.combat_return=returning; self.combat_clear_at=nil
       say('Waiting for combat','Combat interrupted '..w.label..'; keeping the current waypoint and retries.')
       return
@@ -282,13 +289,13 @@ function M.new(route,io,opts)
       return
     end
     if self.phase=='traverse_facing' then
-      if io.combat() then fail('Combat began while facing for ground drop traverse at '..w.label); return end
+      io.combat() -- combat is ignored during traversal phases, not acted on (DL-006): TAC cannot reach a navmesh gap either way
       local actual=io.heading()
       if actual and heading_error(actual,w.heading)<=5 then
         self.traverse_origin={x=p.x,y=p.y,z=p.z}; self.last_z=p.z; self.last_sample=now
         io.forward(true); self.forward=true; self.phase='traverse_approach'; self.started=now
         io.log(string.format('FALL TRAVERSE %s [%s] heading %.2f verified %.2f origin %.2f,%.2f,%.2f; max approach %.1f units / 7000 ms',
-          w.label,w.id,w.heading,actual,p.x,p.y,p.z,math.max(35,xy(w,w.ledge)+15)))
+          w.label,w.id,w.heading,actual,p.x,p.y,p.z,math.max(35,dist(w,w.ledge)+45)))
         say('Running','Ground drop traverse from '..w.label..'; watching for the fall')
       elseif now-self.started>=1000 then
         fail(string.format('Ground drop heading could not be verified at %s (captured %.2f, actual %s)',
@@ -297,7 +304,7 @@ function M.new(route,io,opts)
       return
     end
     if self.phase=='water_facing' or self.phase=='water_descend' or self.phase=='water_cross' or self.phase=='water_ascend' then
-      if io.combat() then fail('Combat began during water traversal at '..w.label..'; movement released.'); return end
+      io.combat() -- combat is ignored during traversal phases, not acted on (DL-006): stopping here guarantees drowning/mob damage with no way to fight back
       local target=w.underwater_target
       local exit=w.exit
       if not target or not exit then fail('Water traversal target or exit missing'); return end
@@ -372,7 +379,7 @@ function M.new(route,io,opts)
       return
     end
     if self.phase=='traverse_approach' or self.phase=='traverse_falling' then
-      if io.combat() then fail('Combat began during ground drop traverse at '..w.label..'; movement released. Check position before resuming.'); return end
+      io.combat() -- combat is ignored during traversal phases, not acted on (DL-006): TAC cannot reach a navmesh gap either way
       if self.phase=='traverse_approach' then
         local actual=io.heading()
         if not actual or heading_error(actual,w.heading)>15 then
@@ -394,8 +401,8 @@ function M.new(route,io,opts)
           if self.slow_since and now-self.slow_since>=750 then traverse_landed(now,p); return end
         end
       end
-      local approach_limit=math.max(35,xy(w,w.ledge)+15)
-      if self.phase=='traverse_approach' and xy(p,self.traverse_origin)>approach_limit then
+      local approach_limit=math.max(35,dist(w,w.ledge)+45)
+      if self.phase=='traverse_approach' and dist(p,self.traverse_origin)>approach_limit then
         fail(string.format('Fall approach passed %.1f-unit limit at %s',approach_limit,w.label)); return
       end
       if self.phase=='traverse_approach' and now-self.started>7000 then fail('Fall did not begin within 7000 ms at '..w.label)
