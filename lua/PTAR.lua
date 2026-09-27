@@ -20,16 +20,13 @@ local function identity()
   return read(function() return mq.TLO.EverQuest.Server() end),read(function() return mq.TLO.Me.Name() end)
 end
 local paths,path_error=path_setup.prepare(mq.configDir)
-if not paths then error('PTAR file migration stopped: '..tostring(path_error)) end
-local logs_moved,log_conflicts=path_setup.migrate_logs(paths)
-if not logs_moved then error('PTAR log migration stopped: '..tostring(log_conflicts)) end
+if not paths then error('PTAR directory setup stopped: '..tostring(path_error)) end
 local function echo_fn(message) mq.print(message) end
 local diag=logger.new(paths.logs,identity,mq.gettime,version.VERSION,echo_fn)
 
 local function log(message)
   diag:event(message)
 end
-if #log_conflicts>0 then log('Legacy logs kept in config because matching log files already exist: '..table.concat(log_conflicts,', ')) end
 local function coords(w) return string.format('locyxz %.3f %.3f %.3f',w.y,w.x,w.z) end
 local function read_bool(fn)
   local ok,v=pcall(fn); return ok and v==true

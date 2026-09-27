@@ -1,4 +1,5 @@
-# Live user data (captured routes, logs, index), auto-relocated by the app at runtime
+# Live user data (captured routes, logs, index)
+config/PTAR/
 config/PTAutoRunner/
 
 # Windows folder metadata

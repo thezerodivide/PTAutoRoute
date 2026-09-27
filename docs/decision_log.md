@@ -70,9 +70,11 @@ Entries are ordered oldest first. New entries append at the bottom.
 
 ### DL-004 — Rename the PTAutorunner folder
 
-- **Status:** Pending (open-dependent — not yet implemented)
-- **Decision:** Rename the `PTAutorunner` config/logs subfolder to a name consistent with the project's actual name, before this folder structure becomes the template other projects copy.
+- **Status:** Implemented together with DL-005 in the same pass (developer chose to combine them, since both touch `PTARPaths.lua`'s `M.prepare` and doing them separately would mean building migration code for the rename just before deleting all migration code in DL-005). Pending live verification.
+- **Decision:** Rename the `PTAutorunner` config/logs subfolder to `PTAR` — chosen over alternatives like `PTAutoRoute` specifically to match every other naming convention already in this project (module names, route files `PTAR_*.lua`, logs `PTAR_*.log`), to prevent user confusion between multiple similar-but-different names.
 - **Why / evidence:** `PTAutorunner` is a legacy name (spec §14). The config/logs separation pattern itself (`macroquest/config/<name>` vs `macroquest/logs/<name>`) is confirmed correct and matches Development Protocol §8 — only the specific name needs to change, not the separation pattern.
+- **No migration code written for the rename itself:** the developer confirmed there are no other live installs/characters with data still under the old `PTAutorunner` name — their own existing local data was manually backed up (zipped) for manual transfer to the new `PTAR` folder. Given DL-005 removes all relocation machinery in this same pass, writing one-off migration code for the rename just to delete it moments later would be pure waste.
+- **Implementation:** [PTARPaths.lua](../lua/PTAR/PTARPaths.lua) `M.prepare` now resolves `<config_root>/PTAR` and `<logs_root>/PTAR` instead of `.../PTAutorunner`. `.gitignore`'s `config/PTAutoRunner/` entry (this repo's local mirror of the live layout) updated to `config/PTAR/`.
 - **Supersedes:** none.
 - **Source:** [PTAR_Rebaseline_Spec.md](PTAR_Rebaseline_Spec.md) §14, §21 (item 4).
 
@@ -80,9 +82,11 @@ Entries are ordered oldest first. New entries append at the bottom.
 
 ### DL-005 — Remove route/log file relocation-on-launch behavior before release
 
-- **Status:** Pending (open-dependent — removal not yet scheduled/implemented; current relocation behavior is intentional and active in the meantime)
+- **Status:** Implemented together with DL-004 (see above), pending live verification.
 - **Decision:** The automatic relocation of legacy route and log files from the MacroQuest config root into the dedicated subfolder, performed on every launch, stays active during testing but must be removed before release.
 - **Why / evidence:** This is relocation-only behavior — never a schema edit — kept deliberately during the testing period to smooth the folder-layout transition (spec §3). It is not meant to be permanent, so its removal is tracked here rather than left to be forgotten once testing ends.
+- **Confirmed safe to remove now:** developer confirmed there are no other installs/characters still holding un-migrated legacy files in the raw MacroQuest config root that this code was protecting.
+- **Implementation:** [PTARPaths.lua](../lua/PTAR/PTARPaths.lua) — removed `relocate()`, `exists()`, and `M.migrate_logs()` entirely; `M.prepare` now only resolves and creates the two directories, returning `{config, logs}` (no more `old_config`, since nothing reads from the legacy root anymore). [PTAR.lua](../lua/PTAR.lua) no longer calls `path_setup.migrate_logs(paths)` or handles `log_conflicts`; startup error message changed from "PTAR file migration stopped" to "PTAR directory setup stopped" (also updated in `PTAREditor.lua` for consistency, which calls the same `prepare()` but never called `migrate_logs`).
 - **Supersedes:** none.
 - **Source:** [PTAR_Rebaseline_Spec.md](PTAR_Rebaseline_Spec.md) §3, §21 (item 5).
 

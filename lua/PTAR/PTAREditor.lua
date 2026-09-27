@@ -7,7 +7,7 @@ local files = require('PTAR.PTARFiles')
 local path_setup=require('PTAR.PTARPaths')
 local version=require('PTAR.PTARVersion')
 local paths,path_error=path_setup.prepare(mq.configDir)
-if not paths then error('PTAR file migration stopped: '..tostring(path_error)) end
+if not paths then error('PTAR directory setup stopped: '..tostring(path_error)) end
 local route,filename,selected,last_creation,last_capture
 local state,message='Unsaved','Create or load a route.'
 local file_draft={value='NewRoute'}
