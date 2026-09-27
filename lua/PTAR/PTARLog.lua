@@ -2,10 +2,11 @@ local M={}
 local function safe(s) return tostring(s or 'unknown'):gsub('[^%w_%-]','_') end
 function M.new(dir,identity,clock)
   local self={verbose=false}
-  function self:path()
+  function self:filename()
     local server,char=identity()
-    return dir..'/PTAR_'..safe(server)..'_'..safe(char)..'.log'
+    return 'PTAR_'..safe(server)..'_'..safe(char)..'.log'
   end
+  function self:path() return dir..'/'..self:filename() end
   function self:write(level,message)
     if level=='DEBUG' and not self.verbose then return end
     local path=self:path()

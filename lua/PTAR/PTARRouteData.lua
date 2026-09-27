@@ -1,7 +1,7 @@
 -- Sleeper's Tomb Route Capture: data, validation and persistence (no MQ dependency).
 local M = {}
-M.FORMAT_VERSION = 1
-local TYPES = { normal=true, door=true, drop_pre=true, drop_post=true, finish=true }
+M.FORMAT_VERSION = 3
+local TYPES = { normal=true, door=true, traverse=true, finish=true }
 local function finite(n) return type(n)=='number' and n==n and n~=math.huge and n~=-math.huge end
 local function filled(s) return type(s)=='string' and s:match('%S') ~= nil end
 local function exists(path) local f=io.open(path,'rb'); if f then f:close(); return true end; return false end
@@ -127,7 +127,7 @@ function M.validate(route)
   if not filled(route.zone_short_name) then hard('Zone short name is required') end
   if route.description~=nil and type(route.description)~='string' then hard('Invalid description') end
   if type(route.waypoints)~='table' then hard('Waypoints must be an array'); return errors,warnings end
-  local count,max,ids,drops,finish=0,0,{}, {},0
+  local count,max,ids,finish=0,0,{},0
   for k in pairs(route.waypoints) do
     if type(k)~='number' or k%1~=0 or k<1 then hard('Waypoint array has an invalid key') else if k>count then count=k end end
   end
@@ -145,15 +145,47 @@ function M.validate(route)
       if not TYPES[w.type] then hard(prefix..'invalid type') end
       for _,field in ipairs({'x','y','z','heading'}) do if not finite(w[field]) then hard(prefix..'invalid '..field) end end
       if w.radius~=nil and (not finite(w.radius) or w.radius<=0) then hard(prefix..'invalid radius') end
+      if w.type=='traverse' then
+        if not finite(w.radius) or w.radius>5 or w.radius<=0 then hard(prefix..'Traversal approach requires radius from 0 to 5') end
+        local phases=w.phases
+        local signature=''
+        if type(phases)=='table' then
+          local pieces={}; for j=1,#phases do if type(phases[j])~='string' then pieces={}; break end; pieces[j]=phases[j] end
+          signature=table.concat(pieces,',')
+        end
+        local ground=signature=='fall'
+        local water=signature=='fall,descend,cross,ascend' or signature=='descend,cross,ascend'
+        if not ground and not water then hard(prefix..'unsupported traversal phases') end
+        if type(phases)=='table' then
+          local expected=ground and 1 or water and (phases[1]=='fall' and 4 or 3) or -1
+          local n=0; for k in pairs(phases) do if type(k)~='number' or k%1~=0 or k<1 then n=-100; break end; n=n+1 end
+          if n~=expected then hard(prefix..'invalid phase array') end
+        end
+        local fall=ground or signature=='fall,descend,cross,ascend'
+        local ledge=w.ledge
+        if fall then
+          if not finite(w.heading) then hard(prefix..'Fall requires departure heading') end
+          if type(ledge)~='table' or not finite(ledge.x) or not finite(ledge.y) or not finite(ledge.z) then
+            hard(prefix..'Fall requires ledge X/Y/Z') end
+        elseif ledge~=nil then hard(prefix..'Water crossing without Fall cannot have a ledge') end
+        if water then
+          local t=w.underwater_target
+          if type(t)~='table' or not finite(t.x) or not finite(t.y) or not finite(t.z) or
+              not finite(t.radius) or t.radius<=0 then hard(prefix..'water crossing requires underwater target X/Y/Z and positive radius') end
+        elseif w.underwater_target~=nil then hard(prefix..'ground traverse cannot have an underwater target') end
+        local exit=w.exit
+        if type(exit)~='table' or not finite(exit.x) or not finite(exit.y) or not finite(exit.z) or
+            not finite(exit.radius) or exit.radius<=0 then hard(prefix..'Traversal requires exit X/Y/Z and positive radius') end
+      end
       if w.manual_handoff~=nil and (type(w.manual_handoff)~='boolean' or w.type~='normal') then hard(prefix..'manual_handoff requires a normal waypoint') end
+      if w.door_after~=nil then
+        if w.type~='door' or (w.door_after~='continue' and w.door_after~='finish_open' and w.door_after~='finish_zone') then
+          hard(prefix..'door_after requires a door and a supported outcome')
+        elseif w.door_after~='continue' then finish=finish+1 end
+      end
       if w.notes~=nil and type(w.notes)~='string' then hard(prefix..'invalid notes') end
       if w.type=='finish' then finish=finish+1; if not finite(w.radius) or w.radius<=0 then hard(prefix..'Finish requires an explicit positive radius') end end
-      if w.type=='drop_pre' or w.type=='drop_post' then
-        if not filled(w.drop_id) then hard(prefix..'drop_id required') else
-          local d=drops[w.drop_id] or {pre=0,post=0}; d[w.type=='drop_pre' and 'pre' or 'post']=d[w.type=='drop_pre' and 'pre' or 'post']+1; drops[w.drop_id]=d
-        end
-      end
-      if w.landing~=nil and (w.type~='drop_pre' or (w.landing~='water' and w.landing~='ground')) then hard(prefix..'landing must be water or ground on Drop Pre') end
+      if w.drop_id~=nil or w.landing~=nil then hard(prefix..'Drop Pre/Post metadata is no longer supported') end
       if w.type=='door' then
         local d=w.door
         if type(d)~='table' or not finite(d.id) or d.id%1~=0 or not filled(d.name) or not finite(d.x) or not finite(d.y) or not finite(d.z) then
@@ -170,15 +202,13 @@ function M.validate(route)
   end
   if finite(route.next_id) and route.next_id<=max then hard('next_id must exceed all allocated waypoint IDs') end
   if finish==0 then warn('No Finish waypoint yet') elseif finish>1 then warn('Multiple Finish waypoints') end
-  if finish==1 and type(route.waypoints[count])=='table' and route.waypoints[count].type~='finish' then warn('Finish is not last') end
-  for id,d in pairs(drops) do
-    if d.pre~=1 or d.post~=1 then warn('Drop '..id..' has '..d.pre..' pre and '..d.post..' post markers') end
-  end
+  if finish==1 and type(route.waypoints[count])=='table' and route.waypoints[count].type~='finish' and
+      route.waypoints[count].door_after~='finish_open' and route.waypoints[count].door_after~='finish_zone' then warn('Finish is not last') end
   local good,why=data_tree(route,{},0); if not good then hard(why) end
   return errors,warnings
 end
 local known_route={'format_version','next_id','route_name','zone_short_name','description','waypoints'}
-local known_wp={'id','label','type','x','y','z','heading','radius','notes','manual_handoff','drop_id','landing','door','segment'}
+local known_wp={'id','label','type','x','y','z','heading','radius','door_after','phases','ledge','underwater_target','exit','notes','manual_handoff','door','segment'}
 local known_door={'id','name','x','y','z'}
 local function quote(s) return string.format('%q',s) end
 local function keys(t,priority)
@@ -208,7 +238,8 @@ local function value(v,depth,priority,field)
   for _,k in ipairs(keys(v,priority=='route' and known_route or priority=='waypoint' and known_wp or priority=='door' and known_door or nil)) do
     if not (type(k)=='number' and k>=1 and k<=array_count and k%1==0) then
       local key=type(k)=='string' and k:match('^[%a_][%w_]*$') and k or '['..value(k,0)..']'
-      local nested=k=='waypoints' and 'waypoints' or k=='door' and 'door' or k=='segment' and nil or nil
+      local nested=k=='waypoints' and 'waypoints' or k=='door' and 'door' or
+        (k=='underwater_target' or k=='ledge' or k=='exit') and 'waypoint' or nil
       out[#out+1]='\n'..pad..'    '..key..' = '..value(v[k],depth+1,nested or (type(v[k])~='table' and priority or nil),k)..','
     end
   end
@@ -232,7 +263,7 @@ function M.round_position(p)
   end; return r
 end
 function M.new(name,zone,description)
-  return {format_version=1,next_id=1,route_name=name,zone_short_name=zone,description=description or '',waypoints={}}
+  return {format_version=M.FORMAT_VERSION,next_id=1,route_name=name,zone_short_name=zone,description=description or '',waypoints={}}
 end
 function M.create(route,where,index,fields,pos,now,last)
   local rounded,e=M.round_position(pos); if not rounded then return nil,e end
@@ -245,10 +276,11 @@ function M.create(route,where,index,fields,pos,now,last)
   end
   local wp={id=string.format('wp_%03d',route.next_id),label=fields.label,type=fields.type,
     x=rounded.x,y=rounded.y,z=rounded.z,heading=rounded.heading,notes=fields.notes or '',radius=fields.radius}
-  if fields.type=='door' then wp.door=fields.door end
-  if fields.type=='drop_pre' or fields.type=='drop_post' then wp.drop_id=fields.drop_id end
-  if fields.type=='drop_pre' then wp.landing=fields.landing end
+  if fields.type=='door' then wp.door=fields.door; wp.door_after=fields.door_after~='continue' and fields.door_after or nil end
   if fields.type=='normal' and fields.manual_handoff then wp.manual_handoff=true end
+  if fields.type=='traverse' then
+    wp.phases=fields.phases; wp.ledge=fields.ledge; wp.underwater_target=fields.underwater_target; wp.exit=fields.exit
+  end
   local index_to_add=where=='append' and (#route.waypoints+1) or (where=='before' and index or index+1)
   table.insert(route.waypoints,index_to_add,wp); route.next_id=route.next_id+1
   return wp,index_to_add

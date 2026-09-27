@@ -1,5 +1,5 @@
 -- Portable route index. Lua has no standard directory enumeration API.
-local data=require('PTARRouteData')
+local data=require('PTAR.PTARRouteData')
 local M={}
 local INDEX='PTAR_Routes.txt'
 function M.filename(input)
@@ -25,6 +25,7 @@ local function names(dir)
   f:close()
   return list
 end
+M.names=names
 function M.scan(dir)
   local list={}
   for _,name in ipairs(names(dir)) do

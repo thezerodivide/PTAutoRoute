@@ -1,10 +1,12 @@
--- /lua run PTAutoRoute
+-- /lua run PTAR
 local mq=require('mq')
 local imgui=require('ImGui')
-local data=require('PTARRouteData')
-local machine=require('PTARRunnerCore')
-local files=require('PTARFiles')
-local logger=require('PTARLog')
+local data=require('PTAR.PTARRouteData')
+local machine=require('PTAR.PTARRunnerCore')
+local files=require('PTAR.PTARFiles')
+local logger=require('PTAR.PTARLog')
+local combat=require('PTAR.PTARCombat')
+local path_setup=require('PTAR.PTARPaths')
 local running=true
 local filename=nil
 local choices={}
@@ -15,11 +17,16 @@ local function identity()
   local function read(fn) local ok,v=pcall(fn); return ok and v or 'unknown' end
   return read(function() return mq.TLO.EverQuest.Server() end),read(function() return mq.TLO.Me.Name() end)
 end
-local diag=logger.new(mq.configDir,identity,mq.gettime)
+local paths,path_error=path_setup.prepare(mq.configDir)
+if not paths then error('PTAR file migration stopped: '..tostring(path_error)) end
+local logs_moved,log_conflicts=path_setup.migrate_logs(paths)
+if not logs_moved then error('PTAR log migration stopped: '..tostring(log_conflicts)) end
+local diag=logger.new(paths.logs,identity,mq.gettime)
 
 local function log(message)
   diag:event(message)
 end
+if #log_conflicts>0 then log('Legacy logs kept in config because matching log files already exist: '..table.concat(log_conflicts,', ')) end
 local function coords(w) return string.format('locyxz %.3f %.3f %.3f',w.y,w.x,w.z) end
 local function read_bool(fn)
   local ok,v=pcall(fn); return ok and v==true
@@ -43,20 +50,20 @@ end
 function adapter.nav_active() return read_bool(function() return mq.TLO.Navigation.Active() end) end
 local last_combat_signals
 local function combat_signals()
-  local me_combat=read_bool(function() return mq.TLO.Me.Combat() end)
-  local ok,count=pcall(function() return tonumber(mq.TLO.Me.XTHaterCount()) end)
-  local xt_haters=ok and count or nil
-  return me_combat,xt_haters,me_combat or (xt_haters or 0)>0
+  return combat.read(mq)
 end
 function adapter.combat()
-  local me_combat,xt_haters,active=combat_signals()
-  local signature=string.format('meCombat=%s xtHaters=%s effectiveCombat=%s',
-    tostring(me_combat),xt_haters and tostring(xt_haters) or 'unavailable',tostring(active))
+  local s=combat_signals()
+  local identities={}
+  for _,entry in ipairs(s.entries) do identities[#identities+1]=entry:gsub(':hp=[^:]+','') end
+  local signature=string.format('meCombat=%s xtHaters=%s xtSlots=%s activeXTargets=%d effectiveCombat=%s [%s]',
+    tostring(s.me_combat),s.xt_haters and tostring(s.xt_haters) or 'unavailable',
+    s.slots and tostring(s.slots) or 'unavailable',s.active_targets,tostring(s.active),table.concat(identities,', '))
   if signature~=last_combat_signals then
-    log('Combat signals: '..signature)
+    log('Combat signals: '..signature..' ['..table.concat(s.entries,', ')..']')
     last_combat_signals=signature
   end
-  return active
+  return s.active
 end
 function adapter.nav(w)
   local cmd='/nav '..coords(w)..' dist='..tostring(w.radius or 15)
@@ -66,8 +73,32 @@ function adapter.nav_stop()
   if nav_owned or adapter.nav_active() then log('/nav stop'); mq.cmd('/nav stop') end
   nav_owned=false
 end
-function adapter.face(heading) mq.cmd(string.format('/face heading %.3f',heading)) end
+function adapter.face(heading)
+  local command_heading=machine.face_heading(heading)
+  log(string.format('FACE captured %.3f -> /face fast heading %.3f',heading,command_heading))
+  mq.cmd(string.format('/face fast heading %.3f',command_heading))
+end
+function adapter.heading()
+  local ok,value=pcall(function() return tonumber(mq.TLO.Me.Heading.Degrees()) end)
+  return ok and value or nil
+end
 function adapter.forward(held) mq.cmd(held and '/keypress forward hold' or '/keypress forward') end
+function adapter.vertical(direction,held)
+  local angle=held and (direction=='down' and -75 or 75) or 0
+  local command='/look '..tostring(angle)
+  log(command); mq.cmd(command)
+end
+function adapter.wet()
+  local ok,feet,head=pcall(function() return mq.TLO.Me.FeetWet(),mq.TLO.Me.HeadWet() end)
+  if ok and type(feet)=='boolean' and type(head)=='boolean' then return feet,head end
+  return nil,nil
+end
+function adapter.bearing(w)
+  local ok,value=pcall(function()
+    return tonumber(mq.TLO.Me.HeadingToLoc(string.format('%.3f,%.3f',w.y,w.x)).Degrees())
+  end)
+  return ok and value or nil
+end
 function adapter.door_state(w)
   local d=w.door; if not d then return nil end
   mq.cmd('/doortarget id '..tostring(d.id))
@@ -86,10 +117,10 @@ function adapter.door_state(w)
     w.id,id,name,x,y,z,distance,tostring(open)))
   return open
 end
-function adapter.door(w)
+function adapter.door(w,click_even_if_open)
   local open,reason=adapter.door_state(w)
   if open==nil then log('Door click refused for '..w.label..': '..tostring(reason)); return false end
-  if open then return 'open' end
+  if open and not click_even_if_open then return 'open' end
   log('DOOR CLICK '..w.id..' '..w.label); mq.cmd('/click left door'); return 'clicked'
 end
 local function snapshot()
@@ -97,23 +128,25 @@ local function snapshot()
   local w=runner and runner.index and route.waypoints[runner.index]
   local function optional(fn) local ok,v=pcall(fn); return ok and tostring(v) or '?' end
   local heading=optional(function() return mq.TLO.Me.Heading.Degrees() end)
-  local me_combat,xt_haters,effective_combat=combat_signals()
+  local combat_state=combat_signals()
   local target=optional(function() return mq.TLO.Target.ID() end)
   local distance='?'
   if p and w then distance=string.format('%.1f',data.distance(p,w)) end
   local now=mq.gettime()
-  return string.format('zone=%s route=%s status=%s phase=%s waypoint=%s lastGood=%s attempt=%s backtracked=%s pos=%s heading=%s dist=%s best=%s progressAgeMs=%s phaseAgeMs=%s navActive=%s mesh=%s meCombat=%s xtHaters=%s effectiveCombat=%s target=%s',
+  return string.format('zone=%s route=%s status=%s phase=%s waypoint=%s lastGood=%s attempt=%s backtracked=%s pos=%s heading=%s dist=%s best=%s progressAgeMs=%s phaseAgeMs=%s navActive=%s mesh=%s meCombat=%s xtHaters=%s activeXTargets=%d xtSlots=%s effectiveCombat=%s xtEntries=[%s] target=%s',
     tostring(adapter.zone()),tostring(filename),runner and runner.status or 'none',runner and tostring(runner.phase) or 'none',
     w and (w.id..'/'..w.label) or 'none',runner and tostring(runner.last_good) or 'none',
     runner and tostring(runner.attempt+1) or 'none',runner and tostring(runner.backtracked) or 'none',
     p and string.format('%.2f,%.2f,%.2f',p.x,p.y,p.z) or 'unavailable',heading,distance,
     runner and tostring(runner.best) or 'none',runner and runner.progress_at and tostring(now-runner.progress_at) or 'none',
     runner and runner.started and tostring(now-runner.started) or 'none',
-    tostring(adapter.nav_active()),tostring(adapter.mesh()),tostring(me_combat),
-    xt_haters and tostring(xt_haters) or 'unavailable',tostring(effective_combat),target)
+    tostring(adapter.nav_active()),tostring(adapter.mesh()),tostring(combat_state.me_combat),
+    combat_state.xt_haters and tostring(combat_state.xt_haters) or 'unavailable',combat_state.active_targets,
+    combat_state.slots and tostring(combat_state.slots) or 'unavailable',tostring(combat_state.active),
+    table.concat(combat_state.entries,', '),target)
 end
 local function refresh_routes()
-  local found,err=files.scan(mq.configDir)
+  local found,err=files.scan(paths.config)
   if not found then notice='Could not scan config routes: '..tostring(err); log(notice); return end
   choices=found
   local exists=false
@@ -125,22 +158,15 @@ local function load_route()
   if runner and (runner.status=='Running' or runner.status=='Recovering' or runner.status=='Waiting for combat') then notice='Pause or Stop before loading another route.'; return end
   if not filename or not files.accept(filename) then notice='Select a route from the list.'; return end
   runner=nil; route=nil
-  local path=mq.configDir..'/'..filename
+  local path=paths.config..'/'..filename
   local loaded,err=data.read(path)
   if not loaded then notice='Load failed: '..tostring(err); return end
   local errors=data.validate(loaded)
-  for i,w in ipairs(loaded.waypoints) do
-    if w.type=='drop_pre' then
-      local post=loaded.waypoints[i+1]
-      if not w.landing then errors[#errors+1]=w.label..' needs landing metadata (water or ground)' end
-      if not post or post.type~='drop_post' or post.drop_id~=w.drop_id then
-        errors[#errors+1]=w.label..' must be followed by its Drop Post marker'
-      end
-    end
-  end
   if #errors>0 then notice='Route invalid: '..table.concat(errors,'; '); return end
   local endpoint=false
-  for _,w in ipairs(loaded.waypoints) do if w.type=='finish' or w.manual_handoff then endpoint=true end end
+  for _,w in ipairs(loaded.waypoints) do
+    if w.type=='finish' or w.manual_handoff or w.door_after=='finish_open' or w.door_after=='finish_zone' then endpoint=true end
+  end
   if #loaded.waypoints==0 or not endpoint then
     notice='Route is still being captured; add a Finish or Manual handoff waypoint before running.'; return
   end
@@ -152,7 +178,7 @@ end
 local function draw()
   imgui.SetNextWindowSize(ImVec2(520,350),ImGuiCond.FirstUseEver)
   imgui.SetNextWindowPos(ImVec2(55,55),ImGuiCond.FirstUseEver)
-  local open,visible=imgui.Begin('Project Triune AutoRoute v0.2-test5###Project Triune AutoRoute',true)
+  local open,visible=imgui.Begin('Project Triune AutoRoute v0.2.0-test.18###Project Triune AutoRoute',true)
   if open==false then running=false end
   if visible then
     if imgui.Button('Close Runner') then running=false end
@@ -172,7 +198,7 @@ local function draw()
       if runner and (runner.status=='Running' or runner.status=='Recovering' or runner.status=='Waiting for combat') then notice='Pause or Stop before refreshing routes.'
       else refresh_routes(); load_route() end
     end
-    imgui.SameLine(); if imgui.Button('New / Edit Route') then mq.cmd('/lua run PTAREditor') end
+    imgui.SameLine(); if imgui.Button('New / Edit Route') then mq.cmd('/lua run PTAR/PTAREditor') end
     if imgui.Button(diag.verbose and 'Verbose Debug: ON' or 'Verbose Debug: OFF') then
       diag:set_verbose(not diag.verbose,snapshot)
     end

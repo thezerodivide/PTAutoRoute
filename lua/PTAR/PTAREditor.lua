@@ -1,9 +1,12 @@
--- /lua run PTAREditor
+-- /lua run PTAR/PTAREditor
 -- Manual capture/editor only. No movement, door clicks, targeting, combat or TAC calls.
 local mq = require('mq')
 local imgui = require('ImGui')
-local core = require('PTARRouteData')
-local files = require('PTARFiles')
+local core = require('PTAR.PTARRouteData')
+local files = require('PTAR.PTARFiles')
+local path_setup=require('PTAR.PTARPaths')
+local paths,path_error=path_setup.prepare(mq.configDir)
+if not paths then error('PTAR file migration stopped: '..tostring(path_error)) end
 local route,filename,selected,last_creation,last_capture
 local state,message='Unsaved','Create or load a route.'
 local file_draft={value='NewRoute'}
@@ -11,21 +14,23 @@ local import_draft={value=''}
 local existing,existing_file={},nil
 local name_draft={value='New Route'}
 local description_draft={value=''}
-local capture={label='',notes='',radius='',drop_id='drop_1',landing='ground',manual_handoff=false}
+local capture={label='',notes='',radius='',manual_handoff=false,door_after='continue',underwater_radius='5',exit_radius='5'}
+local traverse_capture=nil
 local action=1
 local running=true
 local edit={}; local route_edit={}; local delete_confirm_id=nil; local replace_confirm_id=nil
-local TYPES={'normal','door','drop_pre','drop_post','finish'}
+local TYPES={'normal','door','finish'}
 local ACTIONS={
   {label='Add Waypoint',kind='normal',where='append'},
   {label='Capture Door',kind='door',where='append'},
-  {label='Add Drop Pre',kind='drop_pre',where='append'},
-  {label='Add Drop Post',kind='drop_post',where='append'},
   {label='Add Finish',kind='finish',where='append'},
+  {label='Ground drop',kind='traverse',preset='ground'},
+  {label='Drop into water',kind='traverse',preset='water_drop'},
+  {label='Water crossing',kind='traverse',preset='water_cross'},
 }
 for _,placement in ipairs({{where='before',label='Before'},{where='after',label='After'}}) do
   for _,kind in ipairs(TYPES) do
-    local name=({normal='Waypoint',door='Door',drop_pre='Drop Pre',drop_post='Drop Post',finish='Finish'})[kind]
+    local name=({normal='Waypoint',door='Door',finish='Finish'})[kind]
     ACTIONS[#ACTIONS+1]={label='Insert '..name..' '..placement.label,kind=kind,where=placement.where}
   end
 end
@@ -33,10 +38,10 @@ local function set_message(s) message=tostring(s or '') end
 local function safe_filename(name)
   local generated,err=files.filename(name)
   if not generated then return nil,err end
-  return mq.configDir..'/'..generated
+  return paths.config..'/'..generated
 end
 local function refresh_routes()
-  local found,err=files.scan(mq.configDir)
+  local found,err=files.scan(paths.config)
   if not found then set_message('Route scan failed: '..tostring(err)); return end
   existing=found
   local present=false
@@ -74,8 +79,11 @@ local function selected_wp()
 end
 local function sync_edit(w)
   edit={label=w.label or '',type=w.type or 'normal',notes=w.notes or '',radius=w.radius and tostring(w.radius) or '',manual_handoff=w.manual_handoff or false,
-    drop_id=w.drop_id or '',landing=w.landing or 'ground',door_id=w.door and tostring(w.door.id) or '',door_name=w.door and w.door.name or '',
-    door_x=w.door and tostring(w.door.x) or '',door_y=w.door and tostring(w.door.y) or '',door_z=w.door and tostring(w.door.z) or ''}
+    door_after=w.door_after or 'continue',
+    door_id=w.door and tostring(w.door.id) or '',door_name=w.door and w.door.name or '',
+    door_x=w.door and tostring(w.door.x) or '',door_y=w.door and tostring(w.door.y) or '',door_z=w.door and tostring(w.door.z) or '',
+    underwater_radius=w.underwater_target and tostring(w.underwater_target.radius) or '',
+    exit_radius=w.exit and tostring(w.exit.radius) or ''}
 end
 local function select(w)
   local id=w and w.id or nil
@@ -87,43 +95,102 @@ local function saved()
   if not route or not filename then state='Unsaved'; return end
   local ok,e=core.save(route,filename)
   if ok then
-    local registered,reg_error=files.add(mq.configDir,filename:match('[^/\\]+$'))
+    local registered,reg_error=files.add(paths.config,filename:match('[^/\\]+$'))
     if not registered then state='Saved (not listed)'; set_message('Route saved, but could not add it to the route list: '..tostring(reg_error)); return end
     state='Saved '..os.date('%H:%M:%S'); local _,warnings=core.validate(route)
     set_message(#warnings>0 and ('Saved. Warnings: '..table.concat(warnings,'; ')) or 'Saved.')
   else state='Save failed'; set_message('Save failed: '..tostring(e)) end
 end
 local function parse_radius(text,required)
-  if text=='' then if required then return nil,'Finish radius is required' end; return nil end
+  if text=='' then if required then return nil,'An explicit radius is required' end; return nil end
   local r=tonumber(text); if not r or r<=0 or r==math.huge or r~=r then return nil,'Radius must be a positive number' end
   return r
 end
 local function prepared_fields(draft,kind)
   local radius,e=parse_radius(draft.radius or '',kind=='finish'); if e then return nil,e end
-  local fields={label=draft.label,type=kind,notes=draft.notes,radius=radius,drop_id=draft.drop_id,landing=draft.landing,manual_handoff=draft.manual_handoff}
+  if kind=='traverse' then
+    radius=radius or 3
+    if radius>5 then return nil,'Traversal approach radius must be at most 5' end
+  end
+  local fields={label=draft.label,type=kind,notes=draft.notes,radius=radius,manual_handoff=draft.manual_handoff}
   if kind=='door' then
     local d=candidate_door(); if not d then return nil,'Select a door with /doortarget before capture' end
-    fields.door={id=d.id,name=d.name,x=d.x,y=d.y,z=d.z}
+    fields.door={id=d.id,name=d.name,x=d.x,y=d.y,z=d.z}; fields.door_after=draft.door_after
   end
   return fields
 end
 local function capture_waypoint()
-  local chosen=ACTIONS[action]
-  local where=chosen.where
   if not zone_ok() then return end
-  local w,index=selected_wp()
-  if where~='append' and not w then set_message('Select a waypoint for Insert Before/After'); return end
+  local chosen=ACTIONS[action]
   local p=position(); if not p then set_message('Could not read character position and heading'); return end
+  local w,index=selected_wp()
+  if chosen.kind=='traverse' then
+    local session=traverse_capture
+    if not session then
+      if capture.label=='' then set_message('Enter a traversal label before the first capture'); return end
+      local r,e=parse_radius(capture.radius or '',false); if e then set_message(e); return end
+      if r and r>5 then set_message('Traversal approach radius must be at most 5'); return end
+      local ur,ue=parse_radius(capture.underwater_radius or '',chosen.preset~='ground'); if ue then set_message(ue); return end
+      local er,ee=parse_radius(capture.exit_radius or '',true); if ee then set_message(ee); return end
+      traverse_capture={preset=chosen.preset,label=capture.label,notes=capture.notes,radius=r or 3,
+        underwater_radius=ur,exit_radius=er,departure=assert(core.round_position(p)),
+        anchor_id=w and w.id or nil,step=chosen.preset=='water_cross' and 'target' or 'ledge'}
+      set_message('Captured departure and heading. Next: capture '..(traverse_capture.step=='ledge' and 'ledge before the fall.' or 'underwater target.'))
+      return
+    end
+    if session.preset~=chosen.preset then set_message('Finish or cancel the active traversal capture first'); return end
+    if session.step=='ledge' then
+      local rounded=assert(core.round_position(p))
+      session.ledge={x=rounded.x,y=rounded.y,z=rounded.z}
+      session.step=session.preset=='ground' and 'exit' or 'target'
+      set_message('Captured ledge. Next: capture '..(session.step=='target' and 'underwater target.' or 'ground exit.'))
+      return
+    end
+    if session.step=='target' then
+      local ok,feet,head=pcall(function() return mq.TLO.Me.FeetWet(),mq.TLO.Me.HeadWet() end)
+      if not ok or feet~=true or head~=true then
+        set_message('Submerge first (FeetWet and HeadWet true) before capturing the underwater target'); return
+      end
+      local rounded=assert(core.round_position(p))
+      session.target={x=rounded.x,y=rounded.y,z=rounded.z,radius=session.underwater_radius}
+      session.step='exit'; set_message('Captured underwater target. Next: capture dry exit.'); return
+    end
+    if session.preset~='ground' then
+      local ok,feet=pcall(function() return mq.TLO.Me.FeetWet() end)
+      if not ok or feet~=false then set_message('Stand on dry ground (FeetWet false) before capturing exit'); return end
+    end
+    local rounded=assert(core.round_position(p))
+    local exit={x=rounded.x,y=rounded.y,z=rounded.z,radius=session.exit_radius}
+    local phases=session.preset=='ground' and {'fall'} or session.preset=='water_drop' and
+      {'fall','descend','cross','ascend'} or {'descend','cross','ascend'}
+    local where,anchor='append',nil
+    if session.anchor_id then
+      for i,entry in ipairs(route.waypoints) do if entry.id==session.anchor_id then where='after'; anchor=i; break end end
+      if not anchor then set_message('Insertion waypoint was removed during capture'); return end
+    end
+    local created,e=core.create(route,where,anchor,{label=session.label,type='traverse',notes=session.notes,
+      radius=session.radius,phases=phases,ledge=session.ledge,underwater_target=session.target,exit=exit},
+      session.departure,mq.gettime())
+    if not created then set_message(e); return end
+    local errors=core.validate(route)
+    if #errors>0 then core.remove(route,created.id); set_message('Traversal invalid: '..table.concat(errors,'; ')); return end
+    traverse_capture=nil; last_creation=created.id; select(created); saved()
+    capture={label='',notes='',radius='',manual_handoff=false,door_after='continue',underwater_radius='5',exit_radius='5'}
+    if state:match('^Saved') then set_message('Captured '..created.id..' - '..created.label..' with exit.') end
+    return
+  end
+  if chosen.where~='append' and not w then set_message('Select a waypoint for Insert Before/After'); return end
   local fields,e=prepared_fields(capture,chosen.kind); if not fields then set_message(e); return end
   local now=mq.gettime()
-  local created,where_or_error=core.create(route,where,index,fields,p,now,last_capture)
+  local created,where_or_error=core.create(route,chosen.where,index,fields,p,now,last_capture)
   if not created then set_message(where_or_error); return end
   last_creation=created.id; last_capture={time=now,x=created.x,y=created.y,z=created.z}
   select(created); saved()
-  capture={label='',notes='',radius='',drop_id='drop_1',landing='ground',manual_handoff=false}; action=1
+  capture={label='',notes='',radius='',manual_handoff=false,door_after='continue',underwater_radius='5',exit_radius='5'}; action=1
   if state:match('^Saved') then set_message('Captured '..created.id..' - '..created.label) end
 end
 local function do_new()
+  if traverse_capture then set_message('Finish or cancel the traversal capture before creating another route'); return end
   if route and not state:match('^Saved') then set_message('Current route is unsaved; fix/save it before switching routes'); return end
   local path,e=safe_filename(file_draft.value); if not path then set_message(e); return end
   if core.exists(path) or core.exists(path..'.tmp') or core.exists(path..'.bak') then set_message('File already exists; choose another filename or Load Route'); return end
@@ -134,9 +201,10 @@ local function do_new()
   set_message('Created route in zone '..zone..'. '..message)
 end
 local function do_load()
+  if traverse_capture then set_message('Finish or cancel the traversal capture before loading another route'); return end
   if route and not state:match('^Saved') then set_message('Current route is unsaved; fix/save it before switching routes'); return end
   if not existing_file then set_message('Select an existing route'); return end
-  local path=mq.configDir..'/'..existing_file
+  local path=paths.config..'/'..existing_file
   if not core.exists(path) and not core.exists(path..'.tmp') and not core.exists(path..'.bak') then set_message('Route file not found'); return end
   local loaded,notice=core.recover(path); if not loaded then set_message(notice); return end
   route=loaded; filename=path; last_creation=nil; last_capture=nil; select(nil)
@@ -150,17 +218,29 @@ end
 local function apply_metadata()
   local w=selected_wp(); if not w then return end
   local radius,e=parse_radius(edit.radius,edit.type=='finish'); if e then set_message(e); return end
+  if edit.type=='traverse' and (not radius or radius>5) then
+    set_message('Traversal approach radius must be from 0 to 5'); return
+  end
+  if edit.type=='traverse' and w.underwater_target then
+    local ur,ue=parse_radius(edit.underwater_radius,true)
+    if ue then set_message(ue); return end
+    w.underwater_target.radius=ur
+  end
+  if edit.type=='traverse' and w.exit then
+    local er,ee=parse_radius(edit.exit_radius,true)
+    if ee then set_message(ee); return end
+    w.exit.radius=er
+  end
   local old_type=w.type
   w.label=edit.label; w.type=edit.type; w.notes=edit.notes; w.radius=radius
-  if edit.type=='drop_pre' or edit.type=='drop_post' then w.drop_id=edit.drop_id else w.drop_id=nil end
-  w.landing=edit.type=='drop_pre' and edit.landing or nil
   w.manual_handoff=edit.type=='normal' and (edit.manual_handoff and true or nil) or nil
+  if edit.type~='traverse' then w.phases=nil; w.ledge=nil; w.underwater_target=nil; w.exit=nil end
   if edit.type=='door' then
     local d={id=tonumber(edit.door_id),name=edit.door_name,x=tonumber(edit.door_x),y=tonumber(edit.door_y),z=tonumber(edit.door_z)}
     if not d.id or d.id%1~=0 or not d.name or d.name=='' or not d.x or not d.y or not d.z then
       set_message('Door requires ID, name, X, Y, Z'); return end
-    w.door=d
-  else w.door=nil end
+    w.door=d; w.door_after=edit.door_after~='continue' and edit.door_after or nil
+  else w.door=nil; w.door_after=nil end
   if old_type~=edit.type then set_message('Type changed; checking required metadata') end
   saved()
 end
@@ -175,14 +255,6 @@ local function type_combo(id,obj)
     imgui.EndCombo()
   end
 end
-local function landing_combo(id,obj)
-  if imgui.BeginCombo(id,obj.landing or 'ground') then
-    for _,landing in ipairs({'ground','water'}) do
-      if imgui.Selectable(landing,obj.landing==landing) then obj.landing=landing end
-    end
-    imgui.EndCombo()
-  end
-end
 local function handoff_combo(id,obj)
   if imgui.BeginCombo(id,obj.manual_handoff and 'Manual handoff' or 'Continue route') then
     if imgui.Selectable('Continue route',not obj.manual_handoff) then obj.manual_handoff=false end
@@ -190,23 +262,20 @@ local function handoff_combo(id,obj)
     imgui.EndCombo()
   end
 end
-local function unmatched_drop_combo()
-  local pre,post={},{}
-  for _,w in ipairs(route.waypoints) do
-    if w.type=='drop_pre' then pre[w.drop_id]=(pre[w.drop_id] or 0)+1
-    elseif w.type=='drop_post' then post[w.drop_id]=(post[w.drop_id] or 0)+1 end
-  end
-  if imgui.BeginCombo('Unmatched Pre IDs',capture.drop_id or '') then
-    local options={}; for id,count in pairs(pre) do if count>(post[id] or 0) then options[#options+1]=id end end
-    table.sort(options)
-    for _,id in ipairs(options) do if imgui.Selectable(id,capture.drop_id==id) then capture.drop_id=id end end
+local function door_after_combo(id,obj)
+  local labels={continue='Continue to next waypoint',finish_open='Finish upon open',finish_zone='Click door, then finish after zoning'}
+  local current=obj.door_after or 'continue'
+  if imgui.BeginCombo(id,labels[current]) then
+    for _,choice in ipairs({'continue','finish_open','finish_zone'}) do
+      if imgui.Selectable(labels[choice],current==choice) then obj.door_after=choice end
+    end
     imgui.EndCombo()
   end
 end
 local function draw()
   imgui.SetNextWindowSize(ImVec2(760,620),ImGuiCond.FirstUseEver)
   imgui.SetNextWindowPos(ImVec2(55,55),ImGuiCond.FirstUseEver)
-  local open,visible=imgui.Begin('Project Triune AutoRoute Editor v0.2-test5###Project Triune AutoRoute Editor',true)
+  local open,visible=imgui.Begin('Project Triune AutoRoute Editor v0.2.0-test.18###Project Triune AutoRoute Editor',true)
   if open==false then running=false end
   if visible then
     if imgui.Button('Close Editor') then running=false end
@@ -217,7 +286,7 @@ local function draw()
       local name,err=files.filename(import_draft.value)
       if not name then set_message(err)
       else
-        local ok,reason=files.add(mq.configDir,name)
+        local ok,reason=files.add(paths.config,name)
         if ok then refresh_routes(); existing_file=name; set_message('Added '..name..' to route list.')
         else set_message(reason) end
       end
@@ -243,20 +312,33 @@ local function draw()
       imgui.Text('New waypoint (capture at current character position)')
       if imgui.BeginCombo('Action##capture',ACTIONS[action].label) then
         for i,choice in ipairs(ACTIONS) do
-          if imgui.Selectable(choice.label,action==i) then action=i end
+          if imgui.Selectable(choice.label,action==i) then
+            if traverse_capture and i~=action then
+              set_message('Finish or cancel the traversal capture before changing actions')
+            else action=i end
+          end
         end
         imgui.EndCombo()
       end
       local kind=ACTIONS[action].kind
+      if kind=='traverse' then
+        imgui.TextWrapped('The traversal is inserted after the selected waypoint, or appended if none is selected. Use this same Capture button at each point in order: departure and heading, ledge (if falling), underwater target (if swimming), and exit.')
+      end
       text_input('Label##capture',capture,'label')
       text_input('Notes##capture',capture,'notes'); text_input('Radius##capture',capture,'radius')
-      if kind=='normal' then handoff_combo('After waypoint##capture',capture) end
-      if kind=='drop_pre' or kind=='drop_post' then
-        text_input('Drop ID##capture',capture,'drop_id')
-        if kind=='drop_pre' then landing_combo('Landing##capture',capture) end
-        if kind=='drop_post' then unmatched_drop_combo() end
+      if kind=='traverse' then
+        imgui.TextWrapped('Radius is the nav arrival tolerance at departure (blank = 3; maximum 5).')
+        if ACTIONS[action].preset~='ground' then
+        text_input('Underwater target radius##capture',capture,'underwater_radius')
+        end
+        text_input('Exit radius##capture',capture,'exit_radius')
+        local next_label={ledge='capture ledge before the fall',target='capture underwater target',exit='capture exit'}
+        imgui.TextWrapped('Next: '..(traverse_capture and next_label[traverse_capture.step] or 'capture departure and heading'))
+        if traverse_capture and imgui.Button('Cancel Traversal Capture') then traverse_capture=nil; set_message('Traversal capture canceled; route unchanged.') end
       end
+      if kind=='normal' then handoff_combo('After waypoint##capture',capture) end
       if kind=='door' then
+        door_after_combo('After door##capture',capture)
         if imgui.Button('Select Nearest Door') then
           mq.cmd('/doortarget clear')
           mq.cmd('/doortarget')
@@ -282,10 +364,22 @@ local function draw()
         imgui.Text(string.format('Selected: #%d %s | distance from you: %s',index,w.id,distance and string.format('%.1f',distance) or 'unknown'))
         text_input('Label##edit',edit,'label'); type_combo('Type##edit',edit)
         text_input('Notes##edit',edit,'notes'); text_input('Radius##edit',edit,'radius')
+        if w.type=='traverse' then
+          imgui.Text('Phases: '..table.concat(w.phases or {},' -> '))
+          if w.ledge then imgui.Text(string.format('Ledge: X %.3f Y %.3f Z %.3f',w.ledge.x,w.ledge.y,w.ledge.z)) end
+          if w.underwater_target then
+            imgui.Text(string.format('Underwater target: X %.3f Y %.3f Z %.3f',
+              w.underwater_target.x,w.underwater_target.y,w.underwater_target.z))
+            text_input('Underwater target radius##edit',edit,'underwater_radius')
+          end
+          if w.exit then
+            imgui.Text(string.format('Exit: X %.3f Y %.3f Z %.3f',w.exit.x,w.exit.y,w.exit.z))
+            text_input('Exit radius##edit',edit,'exit_radius')
+          end
+        end
         if edit.type=='normal' then handoff_combo('After waypoint##edit',edit) end
-        if edit.type=='drop_pre' or edit.type=='drop_post' then text_input('Drop ID##edit',edit,'drop_id') end
-        if edit.type=='drop_pre' then landing_combo('Landing##edit',edit) end
         if edit.type=='door' then
+          door_after_combo('After door##edit',edit)
           text_input('Door ID',edit,'door_id'); text_input('Door name',edit,'door_name')
           text_input('Door X',edit,'door_x'); text_input('Door Y',edit,'door_y'); text_input('Door Z',edit,'door_z')
           local d=candidate_door()
