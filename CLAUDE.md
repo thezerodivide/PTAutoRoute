@@ -11,7 +11,7 @@ Both govern every change made in this repo. Read them in full before a nontrivia
 
 ## What this is
 
-PTAR (Project Triune AutoRoute) is a two-part Lua suite for **Project Triune / MacroQuest** (an EverQuest automation platform), not a standalone application. There is no build system, package manager, linter, or test runner — code is loaded and run live inside MacroQuest via `/lua run`, and validated through live in-game testing plus manual code review. There are no unit tests in this repo; treat any change as needing a live-test pass before it can be called working.
+PTAR (Project Triune AutoRoute) is a two-part Lua suite for **Project Triune / MacroQuest** (an EverQuest automation platform), not a standalone application. There is no build system, package manager, or linter — code is loaded and run live inside MacroQuest via `/lua run`. A local syntax check and unit-test suite exist for the MQ-free modules (see "Testing" below), but they only raise the floor: anything touching real MacroQuest/game behavior still needs a live-test pass before it can be called working.
 
 Running it (for reference, not something you can do from here): `/lua run PTAR` (Runner) and `/lua run PTAR/PTAREditor` (Editor, normally launched from the Runner's "New / Edit Route" button, which spawns it as a separate Lua process).
 
@@ -79,6 +79,24 @@ If new evidence contradicts the current design, stop and explain the conflict be
 - **Saves are atomic everywhere** (route data, route index): write `.tmp`, verify, promote over the main file, retain `.bak`. Preserve this pattern in any code that persists files.
 - **Start/Resume must be blocked during any active traversal phase** (spec Section 8/16, listed as a confirmed gap/required fix — check current code state before assuming it's already implemented).
 - **Multi-character door coordination is scoped to `continue`/`finish_open` doors only.** `finish_zone` doors are untouched — every character always clicks its own zoning door and waits for its own zone transition, since zoning can't happen by proxy. Only the `continue`/`finish_open` shared branch checks `io.door_role()`/`io.door_confirmed()`; a `secondary` never clicks a door of that kind, under any circumstance, including its own timeout (see DL-008 — a fallback click there would reintroduce the exact multi-instance race it exists to prevent).
+
+## Testing (DL-011 / DL-012)
+
+Windows-only, run from the repo root with `luajit` (same runtime family as MacroQuest, LuaJIT 2.1) on PATH:
+
+- `test\check.cmd` — syntax check, then the full test run. Exit code 0 only if both pass.
+- `luajit test/harness/syntax_check.lua` — parse-checks every `.lua` under `lua/` and `test/` (exit 30 = syntax error, 31 = listing failed).
+- `luajit test/harness/run.lua` — runs every `test/*_test.lua` in its own subprocess (exit 0 pass, 20 a file failed/crashed, 21 discovery/guard failure).
+
+Layout: tests live in `test/` (never under `lua/`, which ships); every `.lua` directly in `test/` must be named `*_test.lua`; support code goes in `test/harness/`, vendored Lester in `test/vendor/`. `PTAR.lua` and `PTAREditor.lua` are parse-checked only. Tests use the real modules with fakes only at existing seams (RunnerCore's `io` adapter via `test/harness/sim.lua`, temp dirs for file modules).
+
+Rules (full text in DL-012):
+- Every test names the requirement it comes from (spec line, DL entry, or a real log line). Expected values come from that source, never from running the code and pasting the result. No source, no assertion.
+- New or changed behavior: write the test from the requirement first, show it failing for the right reason, then implement. Regression tests on existing behavior must be proven able to fail by breaking the production condition.
+- Assert observable behavior (status, phase, message, calls made through `io`) — not private fields, call counts, or source text.
+- If a test fails, decide explicitly whether the code or the test is wrong. Changing an existing expected value is a spec-level change and needs developer sign-off.
+- No test-only branches, flags, or hooks in `lua/`.
+- A green run is never "verified": keep the local / code-review / live tiers distinct in handoffs. Tests never justify a timing constant (Protocol §15).
 
 ## Config directory
 
