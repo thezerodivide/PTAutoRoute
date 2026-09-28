@@ -183,6 +183,10 @@ function M.validate(route)
           hard(prefix..'door_after requires a door and a supported outcome')
         elseif w.door_after~='continue' then finish=finish+1 end
       end
+      for _,field in ipairs({'tac_before','tac_after'}) do
+        local v=w[field]
+        if v~=nil and v~='pause' and v~='run' then hard(prefix..field..' must be "pause" or "run"') end
+      end
       if w.notes~=nil and type(w.notes)~='string' then hard(prefix..'invalid notes') end
       if w.type=='finish' then finish=finish+1; if not finite(w.radius) or w.radius<=0 then hard(prefix..'Finish requires an explicit positive radius') end end
       if w.drop_id~=nil or w.landing~=nil then hard(prefix..'Drop Pre/Post metadata is no longer supported') end
@@ -201,6 +205,16 @@ function M.validate(route)
     end
   end
   if finite(route.next_id) and route.next_id<=max then hard('next_id must exceed all allocated waypoint IDs') end
+  -- Final effective TAC state (DL-013): the last event in route order, "before" then "after" within a waypoint.
+  local last_tac
+  for i=1,count do
+    local w=route.waypoints[i]
+    if type(w)=='table' then
+      if w.tac_before=='pause' or w.tac_before=='run' then last_tac=w.tac_before end
+      if w.tac_after=='pause' or w.tac_after=='run' then last_tac=w.tac_after end
+    end
+  end
+  if last_tac=='pause' then warn('Route ends with TAC paused (no later "run" event)') end
   if finish==0 then warn('No Finish waypoint yet') elseif finish>1 then warn('Multiple Finish waypoints') end
   if finish==1 and type(route.waypoints[count])=='table' and route.waypoints[count].type~='finish' and
       route.waypoints[count].door_after~='finish_open' and route.waypoints[count].door_after~='finish_zone' then warn('Finish is not last') end
@@ -208,7 +222,7 @@ function M.validate(route)
   return errors,warnings
 end
 local known_route={'format_version','next_id','route_name','zone_short_name','description','waypoints'}
-local known_wp={'id','label','type','x','y','z','heading','radius','door_after','phases','ledge','underwater_target','exit','notes','manual_handoff','door','segment'}
+local known_wp={'id','label','type','x','y','z','heading','radius','door_after','phases','ledge','underwater_target','exit','notes','manual_handoff','tac_before','tac_after','door','segment'}
 local known_door={'id','name','x','y','z'}
 local function quote(s) return string.format('%q',s) end
 local function keys(t,priority)
@@ -278,6 +292,8 @@ function M.create(route,where,index,fields,pos,now,last)
     x=rounded.x,y=rounded.y,z=rounded.z,heading=rounded.heading,notes=fields.notes or '',radius=fields.radius}
   if fields.type=='door' then wp.door=fields.door; wp.door_after=fields.door_after~='continue' and fields.door_after or nil end
   if fields.type=='normal' and fields.manual_handoff then wp.manual_handoff=true end
+  if fields.tac_before~=nil then wp.tac_before=fields.tac_before end
+  if fields.tac_after~=nil then wp.tac_after=fields.tac_after end
   if fields.type=='traverse' then
     wp.phases=fields.phases; wp.ledge=fields.ledge; wp.underwater_target=fields.underwater_target; wp.exit=fields.exit
   end

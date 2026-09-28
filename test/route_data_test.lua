@@ -247,3 +247,96 @@ test('spec l64: with nothing valid, recovery reports failure for all three files
   T.assert_contains(note, 'tmp=')
   T.assert_contains(note, 'bak=')
 end)
+
+-- ---------------------------------------------------------------- DL-013 (TAC events on waypoints)
+-- Expectations come from DL-013: fields tac_before / tac_after, values 'pause' or 'run', absent = no event,
+-- an invalid value is an error, a route whose final effective state is paused is a warning (not an error),
+-- unbalanced spans are allowed, `create` copies the fields, and format_version stays 3.
+local function door_wp(id)
+  local w = normal(id)
+  w.type, w.door, w.door_after = 'door', { id = 5, name = 'd', x = 1, y = 2, z = 3 }, 'continue'
+  return w
+end
+
+local function with_events(w, before, after)
+  w.tac_before, w.tac_after = before, after
+  return w
+end
+
+local function warnings_of(r)
+  local _, warnings = RD.validate(r)
+  return warnings
+end
+
+test('DL-013: tac_before and tac_after accept pause and run on every waypoint type', function()
+  for _, make in ipairs({ normal, door_wp, ground_traverse, water_drop, water_cross, finish }) do
+    for _, v in ipairs({ 'pause', 'run' }) do
+      local w = with_events(make('wp_001'), v, v)
+      local rt = route({ w, finish('wp_002') })
+      expect.equal(RD.validate(rt), {})
+    end
+  end
+end)
+
+test('DL-013: any other tac_before or tac_after value is an error naming the field', function()
+  for _, field in ipairs({ 'tac_before', 'tac_after' }) do
+    for _, bad in ipairs({ 'stop', 'PAUSE', '', true, 1 }) do
+      local w = normal('wp_001')
+      w[field] = bad
+      local errs = joined((RD.validate(route({ w, finish('wp_002') }))))
+      T.assert_contains(errs, field)
+    end
+  end
+end)
+
+test('DL-013: a route with no TAC events has no errors and no TAC warning (no event is the default)', function()
+  local rt = route()
+  expect.equal(RD.validate(rt), {})
+  expect.falsy(table.concat(warnings_of(rt), ' | '):find('TAC', 1, true))
+end)
+
+local final_state_cases = {
+  { 'a lone pause', { with_events(normal('wp_001'), 'pause', nil), finish('wp_002') }, true },
+  { 'pause then run on a later waypoint', { with_events(normal('wp_001'), 'pause', nil), with_events(finish('wp_002'), nil, 'run') }, false },
+  { 'pause and run on the same waypoint (after runs last)', { with_events(normal('wp_001'), 'pause', 'run'), finish('wp_002') }, false },
+  { 'run then a final pause', { with_events(normal('wp_001'), 'run', nil), with_events(finish('wp_002'), nil, 'pause') }, true },
+  { 'pause, run, pause', { with_events(normal('wp_001'), 'pause', 'run'), with_events(finish('wp_002'), 'pause', nil) }, true },
+  { 'only a run (unbalanced, opens nothing)', { with_events(normal('wp_001'), 'run', nil), finish('wp_002') }, false },
+}
+for _, case in ipairs(final_state_cases) do
+  test('DL-013: final effective TAC state - ' .. case[1] .. (case[3] and ' warns' or ' does not warn') .. ', never errors', function()
+    local rt = route(case[2])
+    expect.equal(RD.validate(rt), {})   -- unbalanced spans are allowed
+    local text = table.concat(warnings_of(rt), ' | ')
+    if case[3] then
+      T.assert_contains(text, 'TAC')
+    else
+      expect.falsy(text:find('TAC', 1, true))
+    end
+  end)
+end
+
+test('DL-013: create copies tac_before and tac_after onto the new waypoint', function()
+  local rt = RD.new('R', 'zone')
+  local wp = assert(RD.create(rt, 'append', nil,
+    { label = 'x', type = 'normal', tac_before = 'pause', tac_after = 'run' },
+    { x = 1, y = 2, z = 3, heading = 4 }, 1000))
+  expect.equal(wp.tac_before, 'pause')
+  expect.equal(wp.tac_after, 'run')
+end)
+
+test('DL-013: create adds no TAC fields when none are given (no event is the default)', function()
+  local rt = RD.new('R', 'zone')
+  local wp = assert(RD.create(rt, 'append', nil, { label = 'x', type = 'normal' }, { x = 1, y = 2, z = 3, heading = 4 }, 1000))
+  expect.equal(wp.tac_before, nil)
+  expect.equal(wp.tac_after, nil)
+end)
+
+test('DL-013: TAC events survive a save and read round trip; format_version stays 3', function()
+  local path = T.with_temp_dir() .. BS .. 'r.lua'
+  local rt = route({ with_events(normal('wp_001'), 'pause', nil), with_events(finish('wp_002'), nil, 'run') })
+  assert(RD.save(rt, path))
+  local back = assert(RD.read(path))
+  expect.equal(back, rt)
+  expect.equal(back.format_version, 3)
+end)
