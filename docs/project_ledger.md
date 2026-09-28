@@ -6,7 +6,7 @@ When new evidence resolves an open question, update this ledger before building 
 
 ## Up next
 
-**[DL-011](decision_log.md#dl-011--add-syntax-checking-and-unit-tests-for-mq-free-modules-priority-item-for-next-session) (syntax checking + unit tests for the MQ-free modules) is the agreed first priority** — ahead of DL-010's implementation. Design resolved in [DL-012](decision_log.md#dl-012--test-harness-design-lester-vendored--custom-runner-with-per-file-subprocess-isolation) (Lester + custom runner); implementation in progress.
+**[DL-011](decision_log.md#dl-011--add-syntax-checking-and-unit-tests-for-mq-free-modules-priority-item-for-next-session) (syntax checking + unit tests for the MQ-free modules) is done** (local/simulated validation only): design in [DL-012](decision_log.md#dl-012--test-harness-design-lester-vendored--custom-runner-with-per-file-subprocess-isolation), harness and 80 tests committed (`test\check.cmd`). DL-010's implementation, still held, is next whenever the developer says go.
 
 ## Pending Live Verification
 
@@ -76,7 +76,7 @@ Questions intentionally unresolved — do not decide these unilaterally; surface
 - **Full UI redesign, both Runner and Editor windows (spec §11, §20):** current layout for both windows is not considered satisfactory; a redesign is planned as a future revision and is explicitly out of scope for the current spec document.
 - **TAC integration, if ever added (spec §3, §15):** out of scope for this version; if added later, scope is explicitly limited to starting TAC in Manual mode when the user presses Start — no broader TAC state management. Not a current open question, but noted so a broader TAC integration is never assumed in without a fresh scoping discussion.
 - **[DL-009](decision_log.md#dl-009--levitate-breaks-ground-drop-traversal-fall-detection-known-limitation-deferred)** — Levitate breaks ground-drop fall-detection: confirmed, deliberately deferred as a known limitation (don't levitate before a fall-based traversal).
-- **[DL-010](decision_log.md#dl-010--multi-client-waypoint-barrier-sync-agreed-design-implementation-deliberately-held)** — multi-client waypoint barrier sync (solves the DL-008-discovered drift/combat-desync problem): design fully agreed, implementation not started. Ready to build whenever the developer says go.
+- **[DL-010](decision_log.md#dl-010--multi-client-waypoint-barrier-sync-agreed-design-implementation-deliberately-held)** — multi-client waypoint barrier sync (solves the DL-008-discovered drift/combat-desync problem): design fully agreed, amended 2026-09-28 (message names, door-confirmation staleness resolved by clearing on barrier release, no door-specific radius); implementation not started. Open: primary-drops gap (nobody left to click doors). Ready to build, tests first, whenever the developer says go.
 
 ## Out of scope
 
