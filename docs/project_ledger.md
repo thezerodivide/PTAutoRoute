@@ -6,7 +6,7 @@ When new evidence resolves an open question, update this ledger before building 
 
 ## Up next
 
-**[DL-011](decision_log.md#dl-011--add-syntax-checking-and-unit-tests-for-mq-free-modules-priority-item-for-next-session) (syntax checking + unit tests for the MQ-free modules) is the explicitly agreed first thing to do in the next working session** — ahead of DL-010's implementation or anything else. Not yet started; tooling choice and which modules get tests first are still undecided.
+**[DL-011](decision_log.md#dl-011--add-syntax-checking-and-unit-tests-for-mq-free-modules-priority-item-for-next-session) (syntax checking + unit tests for the MQ-free modules) is the agreed first priority** — ahead of DL-010's implementation. Design resolved in [DL-012](decision_log.md#dl-012--test-harness-design-lester-vendored--custom-runner-with-per-file-subprocess-isolation) (Lester + custom runner); implementation in progress.
 
 ## Pending Live Verification
 
