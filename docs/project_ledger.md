@@ -8,6 +8,14 @@ When new evidence resolves an open question, update this ledger before building 
 
 **[DL-011](decision_log.md#dl-011--add-syntax-checking-and-unit-tests-for-mq-free-modules-priority-item-for-next-session) (syntax checking + unit tests for the MQ-free modules) is done** (local/simulated validation only): design in [DL-012](decision_log.md#dl-012--test-harness-design-lester-vendored--custom-runner-with-per-file-subprocess-isolation), harness and 80 tests committed (`test\check.cmd`). **[DL-013](decision_log.md#dl-013--route-authored-tac-pauserun-events-explicit-opt-in-verified-through-ac-status) (route-authored TAC pause/run events) design is agreed; implementation not started, tests first.** DL-010's implementation stays held.
 
+## Dependencies (not yet built)
+
+Only unbuilt entries are listed; everything else is delivered. Reasoning and order rules live in the entries.
+
+- **[DL-010](decision_log.md#dl-010--multi-client-waypoint-barrier-sync-agreed-design-implementation-deliberately-held)** — depends on DL-008, DL-012.
+- **[DL-013](decision_log.md#dl-013--route-authored-tac-pauserun-events-explicit-opt-in-verified-through-ac-status)** — depends on DL-001, DL-006, DL-012.
+- **DL-010 and DL-013 share the runner's arrival and completion seams.** Agreed arrival order: barrier release, then `tac_before`, then the action. Open before implementing: the Start/Resume block and combat rule for the barrier-wait phase.
+
 ## Pending Live Verification
 
 Implemented code changes not yet confirmed by live testing. Check this before assuming a fix in the code is validated — cross-reference each with its decision log entry for full context. Move an item out of this section (and update its decision log status) the moment it's confirmed, whichever bucket it's in.
