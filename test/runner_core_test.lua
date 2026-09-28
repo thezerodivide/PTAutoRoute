@@ -334,3 +334,262 @@ test('DL-008: finish_open shares the continue branch - a primary announces and t
   expect.equal(s.count('announce'), 1)
   expect.equal(r.status, 'Completed')
 end)
+
+-- ================================================================ DL-013 (TAC events)
+-- Expectations come from DL-013: opt-in (no event is the default), before fires on arrival ahead of the action,
+-- after fires at completion inside advance(), check-first and verified through the status query, at most 3
+-- attempts (first plus 2 retries), an unconfirmed pause proceeds with a loud log, an unconfirmed run fails to
+-- Error, Start/Resume are blocked and explained during a TAC phase, combat is ignored there, and a TAC left
+-- paused is logged. The wait lengths and retry spacing are implementation choices, so tests use generous limits.
+local function tick_until(r, t, limit_ms, done)
+  local started = t
+  while t - started < limit_ms and not done() do
+    t = t + 100
+    r:tick(t)
+  end
+  return t
+end
+
+local function tac_calls(s) return s.count('tac_command') + s.count('tac_query') end
+
+local function has_log(s, needle)
+  for _, l in ipairs(s.logs) do if l:find(needle, 1, true) then return true end end
+  return false
+end
+
+local function first_index(names, name)
+  for i, n in ipairs(names) do if n == name then return i end end
+end
+
+local function last_index(names, name)
+  for i = #names, 1, -1 do if names[i] == name then return i end end
+end
+
+-- Runner standing at a ground traverse that has the given TAC events, arrival tick done.
+local function at_tac_before(extra, tweak)
+  local rt = ground_route(nil, extra or { tac_before = 'pause' })
+  local s = Sim.new()
+  if tweak then tweak(s) end
+  local r = Core.new(rt, s.io)
+  r:start(1, 1000)
+  r:tick(1100)
+  return r, s, 1100, rt
+end
+
+test('DL-013: a route with no events makes zero TAC calls and logs no TAC state', function()
+  local s = Sim.new()
+  local r = Core.new(far_route(), s.io)
+  r:start(1, 1000)
+  s.p = { x = 0, y = -200, z = 0 }
+  r:tick(1100)
+  s.p = { x = 0, y = -400, z = 0 }
+  r:tick(1200)
+  expect.equal(r.status, 'Completed')
+  expect.equal(tac_calls(s), 0)
+  r:stop()
+  expect.falsy(has_log(s, 'TAC left paused'))
+end)
+
+test('DL-013: tac_before pause is confirmed before facing for the fall begins', function()
+  local r, s, t = at_tac_before()
+  expect.equal(r.phase, 'tac_before')
+  expect.equal(s.count('face'), 0)
+  tick_until(r, t, 10000, function() return r.phase == 'traverse_facing' end)
+  expect.equal(r.phase, 'traverse_facing')
+  expect.equal(s.count('tac_command'), 1)
+  expect.equal(s.last('tac_command')[1], 'pause')
+  local names = s.names()
+  expect.truthy(last_index(names, 'tac_query') < first_index(names, 'face'))   -- verified, then the action
+end)
+
+test('DL-013: check-first - no command is sent when TAC already reports the goal state', function()
+  local r, s, t = at_tac_before(nil, function(sim) sim.tac_actual = 'paused' end)
+  tick_until(r, t, 10000, function() return r.phase == 'traverse_facing' end)
+  expect.equal(r.phase, 'traverse_facing')
+  expect.equal(s.count('tac_command'), 0)
+end)
+
+test('DL-013: an unconfirmed pause is retried up to 3 attempts in total, then proceeds with a loud log', function()
+  local r, s, t = at_tac_before(nil, function(sim) sim.tac_applies = false end)
+  tick_until(r, t, 60000, function() return r.phase == 'traverse_facing' end)
+  expect.equal(r.phase, 'traverse_facing')          -- proceeded
+  expect.equal(s.count('tac_command'), 3)           -- first attempt plus 2 retries
+  expect.truthy(has_log(s, 'proceeding'))
+  expect.truthy(has_log(s, 'pause'))
+end)
+
+test('DL-013: a status query that is never answered counts as unconfirmed; the pause still proceeds after 3 attempts', function()
+  local r, s, t = at_tac_before(nil, function(sim) sim.tac_answers = false end)
+  local t_end = tick_until(r, t, 120000, function() return r.phase == 'traverse_facing' end)
+  expect.equal(r.phase, 'traverse_facing')
+  expect.equal(s.count('tac_command'), 3)
+  expect.truthy(t_end - t >= 5000)                  -- at least one full answer timeout elapsed
+  expect.truthy(has_log(s, 'proceeding'))
+end)
+
+test('DL-013: an unconfirmed run fails the leg to Error naming TAC and run', function()
+  local rt = route({ wp('wp_001', 0, 0, 0, { tac_after = 'run' }), wp('wp_002', 0, -100, 0, { type = 'finish', radius = 5 }) })
+  local s = Sim.new()
+  s.tac_actual, s.tac_applies = 'paused', false
+  local r = Core.new(rt, s.io)
+  r:start(1, 1000)
+  r:tick(1100)
+  tick_until(r, 1100, 120000, function() return r.status == 'Error' end)
+  expect.equal(r.status, 'Error')
+  T.assert_contains(r.message, 'TAC')
+  T.assert_contains(r.message, 'run')
+  expect.equal(s.count('tac_command'), 3)
+end)
+
+test('DL-013: tac_after on a traversal fires after the exit is reached and before the next leg', function()
+  local rt = ground_route(nil, { tac_after = 'run' })
+  rt.waypoints[2] = wp('wp_002', 0, -160, -40, { type = 'finish', radius = 5 })
+  local r, s, t = to_phase(rt, 'ground_exit')
+  s.tac_actual = 'paused'
+  local exit = rt.waypoints[1].exit
+  s.p = { x = exit.x, y = exit.y, z = exit.z }
+  r:tick(t + 100)
+  expect.equal(r.phase, 'tac_after')
+  expect.truthy(s.last('nav')[1] == exit)            -- no leg to the next waypoint yet
+  tick_until(r, t + 100, 10000, function() return r.phase ~= 'tac_after' end)
+  expect.equal(s.last('tac_command')[1], 'run')
+  expect.equal(s.last('nav')[1].id, 'wp_002')        -- the next leg starts only after the run is confirmed
+end)
+
+test('DL-013: tac_after on a finish waypoint fires before Completed', function()
+  local rt = route({ wp('wp_001', 0, -200, 0, { radius = 5 }),
+    wp('wp_002', 0, -400, 0, { type = 'finish', radius = 5, tac_after = 'run' }) })
+  local s = Sim.new()
+  s.tac_actual = 'paused'
+  local r = Core.new(rt, s.io)
+  r:start(1, 1000)
+  s.p = { x = 0, y = -200, z = 0 }
+  r:tick(1100)
+  s.p = { x = 0, y = -400, z = 0 }
+  r:tick(1200)
+  expect.equal(r.phase, 'tac_after')
+  expect.equal(r.status, 'Running')                  -- not Completed until the run is confirmed
+  tick_until(r, 1200, 10000, function() return r.status == 'Completed' end)
+  expect.equal(r.status, 'Completed')
+  expect.equal(s.last('tac_command')[1], 'run')
+end)
+
+local function span_route()
+  return route({ wp('wp_001', 0, -100, 0, { radius = 5, tac_before = 'pause' }),
+    wp('wp_002', 0, -200, 0, { radius = 5 }), wp('wp_003', 0, -300, 0, { type = 'finish', radius = 5 }) })
+end
+
+test('DL-013: Start asserts the effective TAC state when an earlier event set one', function()
+  local s = Sim.new()
+  local r = Core.new(span_route(), s.io)
+  r:start(2, 1000)
+  expect.equal(r.phase, 'tac_assert')
+  tick_until(r, 1000, 10000, function() return r.phase == 'nav' end)
+  expect.equal(r.phase, 'nav')
+  expect.equal(s.count('tac_command'), 1)
+  expect.equal(s.last('tac_command')[1], 'pause')
+  expect.equal(s.last('nav')[1].id, 'wp_002')
+end)
+
+test('DL-013: Start asserts nothing when no event is at or before the starting point', function()
+  local s = Sim.new()
+  local r = Core.new(span_route(), s.io)
+  r:start(1, 1000)                                    -- wp_001's own "before" fires on arrival, not at Start
+  expect.equal(r.phase, 'nav')
+  expect.equal(tac_calls(s), 0)
+end)
+
+test('DL-013: backtrack inside a span sends no redundant command (check-first)', function()
+  local rt = route({ wp('wp_001', 0, -100, 0, { radius = 5 }),
+    wp('wp_002', 0, -200, 0, { radius = 5, tac_before = 'pause' }), wp('wp_003', 0, -300, 0, { type = 'finish', radius = 5 }) })
+  local s = Sim.new()
+  local r = Core.new(rt, s.io)
+  r:start(1, 1000)
+  s.p = { x = 0, y = -100, z = 0 }; r:tick(1100)      -- wp_001 done, leg to wp_002
+  s.p = { x = 0, y = -200, z = 0 }
+  local t = tick_until(r, 1100, 10000, function() return r.phase == 'nav' and r.index == 3 end)
+  expect.equal(r.index, 3)
+  expect.equal(s.tac_actual, 'paused')
+  expect.equal(s.count('tac_command'), 1)
+  s.nav_active = false                                -- the leg to wp_003 stalls until it backtracks
+  t = tick_until(r, t, 60000, function() return r.phase == 'backtrack' end)
+  expect.equal(r.phase, 'backtrack')
+  s.nav_active = true
+  s.p = { x = 0, y = -200, z = 0 }
+  tick_until(r, t, 10000, function() return r.phase == 'nav' end)
+  expect.equal(s.count('tac_command'), 1)             -- nothing redundant
+  expect.equal(s.count('tac_query'), 3)               -- 2 at the first arrival, 1 check-first at the backtrack
+end)
+
+test('DL-013: Start, Resume and Use-Nearest are blocked during a TAC phase with a reason naming the state and attempt', function()
+  local r, s, t = at_tac_before(nil, function(sim) sim.tac_applies = false end)
+  expect.equal(r.phase, 'tac_before')
+  local before = #s.calls
+  r:start(1, t + 10)
+  T.assert_contains(r.message, 'Start/Resume blocked')
+  T.assert_contains(r.message, 'TAC')
+  T.assert_contains(r.message, 'paused')
+  T.assert_contains(r.message, 'attempt 1 of 3')
+  r:resume(t + 20)
+  T.assert_contains(r.message, 'Start/Resume blocked')
+  r:start_nearest(t + 30)
+  T.assert_contains(r.message, 'Start/Resume blocked')
+  expect.equal(#s.calls, before)                       -- nothing was touched
+  expect.truthy(has_log(s, 'Start/Resume blocked'))   -- every blocked press is logged
+end)
+
+test('DL-013: the blocked-press note stays visible when the phase updates for a retry', function()
+  local r, s, t = at_tac_before(nil, function(sim) sim.tac_applies = false end)
+  r:start(1, t + 10)
+  tick_until(r, t, 30000, function() return r.message:find('attempt 2 of 3', 1, true) ~= nil end)
+  T.assert_contains(r.message, 'attempt 2 of 3')
+  T.assert_contains(r.message, 'Start/Resume')
+end)
+
+test('DL-013: combat has no effect during a TAC phase', function()
+  local function next_tick(combat)
+    local r, s, t = at_tac_before()
+    s.combat = combat
+    r:tick(t + 100)
+    return { status = r.status, phase = r.phase, message = r.message, calls = s.names() }
+  end
+  local with_combat, without = next_tick(true), next_tick(false)
+  expect.equal(with_combat, without)
+  expect.equal(with_combat.phase, 'tac_before')
+end)
+
+test('DL-013: stopping while TAC is paused logs "TAC left paused"', function()
+  local r, s, t = at_tac_before()
+  tick_until(r, t, 10000, function() return r.phase == 'traverse_facing' end)
+  expect.equal(s.tac_actual, 'paused')
+  r:stop()
+  expect.truthy(has_log(s, 'TAC left paused'))
+end)
+
+test('DL-013: an error while TAC is paused logs "TAC left paused"', function()
+  local r, s, t = at_tac_before()
+  tick_until(r, t, 10000, function() return r.phase == 'traverse_facing' end)
+  s.zone = 'elsewhere'
+  r:tick(t + 20000)
+  expect.equal(r.status, 'Error')
+  expect.truthy(has_log(s, 'TAC left paused'))
+end)
+
+test('DL-013: completion messages make no claim about TAC', function()
+  local s = Sim.new()
+  local r = Core.new(far_route(), s.io)
+  r:start(1, 1000)
+  s.p = { x = 0, y = -200, z = 0 }; r:tick(1100)
+  s.p = { x = 0, y = -400, z = 0 }; r:tick(1200)
+  expect.equal(r.status, 'Completed')
+  expect.falsy(r.message:find('TAC', 1, true))
+  -- finish_zone completion
+  local zs = Sim.new()
+  local zr = Core.new(route({ wp('wp_001', 0, 0, 0, { type = 'door', door_after = 'finish_zone',
+    door = { id = 9, name = 'z', x = 1, y = 1, z = 1 } }) }), zs.io)
+  zr:start(1, 1000); zr:tick(1100); zs.door_state = false; zr:tick(1500)
+  expect.equal(zr.phase, 'door_zone')
+  zs.zone = 'bazaar'; zr:tick(1600)
+  expect.equal(zr.status, 'Completed')
+  expect.falsy(zr.message:find('TAC', 1, true))
+end)

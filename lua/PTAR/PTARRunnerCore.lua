@@ -14,6 +14,12 @@ local function water(w) return w.phases and #w.phases>1 end
 local function xy(a,b) return math.sqrt((a.x-b.x)^2+(a.y-b.y)^2) end
 local TRAVERSAL_PHASES={traverse_facing=true,traverse_approach=true,traverse_falling=true,
   water_facing=true,water_descend=true,water_cross=true,water_ascend=true}
+-- TAC events (DL-013). The three values below are first guesses, not measured (Protocol section 15).
+local TAC_PHASES={tac_before=true,tac_after=true,tac_assert=true}
+local TAC_ANSWER_MS=5000        -- wait for an /ac status answer
+local TAC_MAX_ATTEMPTS=3        -- first attempt plus 2 retries
+local TAC_RETRY_SPACING_MS=1000 -- pause between attempts
+local function tac_word(command) return command=='pause' and 'paused' or 'running' end
 
 function M.new(route,io,opts)
   opts=opts or {}
@@ -36,10 +42,107 @@ function M.new(route,io,opts)
   local function halt()
     release(); io.nav_stop()
   end
+  -- Last confirmed TAC state is tracked only to explain a paused TAC left behind (DL-013); no restore is attempted.
+  local function note_tac_paused(why)
+    if self.tac_known=='paused' then io.log('TAC left paused: '..why) end
+  end
   local function fail(reason)
-    halt(); self.index=nil; say('Error',reason..' Use Resume (nearest valid waypoint) or Stop.')
+    halt(); self.index=nil; self.tac=nil
+    say('Error',reason..' Use Resume (nearest valid waypoint) or Stop.')
+    note_tac_paused('run ended with an Error')
+  end
+  -- Effective TAC state once waypoint `index` has completed: the last event in route order, before then after
+  -- within a waypoint. nil means no event yet, and PTAR asserts nothing.
+  local function tac_state_after(index)
+    local last
+    for i=1,index do
+      local w=waypoints[i]
+      if w then
+        if w.tac_before=='pause' or w.tac_before=='run' then last=w.tac_before end
+        if w.tac_after=='pause' or w.tac_after=='run' then last=w.tac_after end
+      end
+    end
+    return last
+  end
+  local function tac_progress()
+    local t=self.tac
+    local text=string.format('Setting TAC to %s %s (attempt %d of %d)',tac_word(t.command),t.phrase,t.attempt,TAC_MAX_ATTEMPTS)
+    if t.block_note then text=text..' [Start/Resume was blocked while this runs; it works again when this finishes.]' end
+    say('Running',text)
+  end
+  -- Check-first, send, verify through the status query, bounded retries. `cont` runs when the phase ends.
+  local function begin_tac(phase,command,phrase,cont,now)
+    io.nav_stop()
+    self.tac={command=command,phrase=phrase,cont=cont,attempt=1,sent=false,step='wait',asked_at=now,block_note=false}
+    self.phase=phase
+    tac_progress()
+    io.tac_query()
+  end
+  local function tac_done(now,how)
+    local t=self.tac
+    io.log('TAC '..tac_word(t.command)..' '..how)
+    self.tac=nil
+    t.cont(now)
+  end
+  local function tac_unconfirmed(now,why)
+    local t=self.tac
+    if t.attempt<TAC_MAX_ATTEMPTS then
+      io.log(string.format('TAC %s not confirmed after attempt %d of %d (%s); retrying',t.command,t.attempt,TAC_MAX_ATTEMPTS,why))
+      t.step='retry_wait'; t.retry_at=now+TAC_RETRY_SPACING_MS
+      return
+    end
+    if t.command=='pause' then
+      io.log(string.format('TAC pause NOT confirmed after %d attempts (%s); proceeding without a confirmed pause',TAC_MAX_ATTEMPTS,why))
+      local cont=t.cont
+      self.tac=nil
+      cont(now)
+    else
+      fail(string.format('TAC run was not confirmed after %d attempts (%s); TAC may still be paused (/ac run).',TAC_MAX_ATTEMPTS,why))
+    end
+  end
+  -- Every send is logged with its reason, so a failed or retried command can be reconstructed from the log alone.
+  local function tac_send(now,why)
+    local t=self.tac
+    io.log(string.format('TAC: sending /ac %s (attempt %d of %d): %s',t.command,t.attempt,TAC_MAX_ATTEMPTS,why))
+    io.tac_command(t.command); t.sent=true
+    t.step='wait'; t.asked_at=now; io.tac_query()
+  end
+  local function tac_tick(now)
+    local t=self.tac
+    if not t then return end
+    if t.step=='retry_wait' then
+      if now<t.retry_at then return end
+      t.attempt=t.attempt+1; tac_progress()
+      tac_send(now,'retry after an unconfirmed attempt')
+      return
+    end
+    local state=io.tac_state()
+    if state==nil then
+      if now-t.asked_at<TAC_ANSWER_MS then return end
+      io.log('TAC /ac status query timed out after '..TAC_ANSWER_MS..' ms')
+      if not t.sent then
+        tac_send(now,'the first status query got no answer, so the state is unknown')
+        return
+      end
+      return tac_unconfirmed(now,'no answer to /ac status')
+    end
+    if state=='paused' or state=='running' then self.tac_known=state end
+    if state==tac_word(t.command) then
+      return tac_done(now,t.sent and ('confirmed on attempt '..t.attempt) or 'already set; no command needed')
+    end
+    if not t.sent then
+      tac_send(now,'/ac status reported '..tostring(state))
+      return
+    end
+    tac_unconfirmed(now,'/ac status reported '..tostring(state))
   end
   local function traversal_blocked()
+    if self.tac and TAC_PHASES[self.phase] then
+      self.tac.block_note=true
+      say(self.status,string.format('Start/Resume blocked: PTAR is setting TAC to %s (attempt %d of %d). Try again when this finishes.',
+        tac_word(self.tac.command),self.tac.attempt,TAC_MAX_ATTEMPTS))
+      return true
+    end
     if not TRAVERSAL_PHASES[self.phase] then return false end
     say(self.status,'Start/Resume blocked: still in traversal phase '..self.phase..'. Verify character position, then Stop before restarting.')
     return true
@@ -104,14 +207,21 @@ function M.new(route,io,opts)
   end
   local function advance(now)
     local w=waypoints[self.index]
+    if w.tac_after and self.tac_after_for~=self.index then
+      -- The waypoint's own action is complete; set TAC before anything else happens (DL-013).
+      begin_tac('tac_after',w.tac_after,'after '..w.label,function(n) self.tac_after_for=self.index; advance(n) end,now)
+      return
+    end
     io.nav_stop()
     self.phase=nil
     if w.type=='traverse' then self.last_good=nil else self.last_good=self.index end
     if w.manual_handoff then
-      self.index=nil; say('Manual handoff','Reached '..w.label..'. Continue the drops manually.'); return
+      self.index=nil; say('Manual handoff','Reached '..w.label..'. Continue the drops manually.')
+      note_tac_paused('route handed off manually'); return
     end
     if w.type=='finish' or (w.type=='door' and w.door_after=='finish_open') then
-      self.index=nil; say('Completed','Reached '..w.label..'. TAC remains in manual mode.'); return
+      self.index=nil; say('Completed','Reached '..w.label..'.')
+      note_tac_paused('route completed'); return
     end
     self.index=self.index+1
     if not waypoints[self.index] then fail('Route ended without a Finish'); return end
@@ -164,6 +274,33 @@ function M.new(route,io,opts)
     io.log(string.format('GROUND DROP LANDED %s descent %.1f Z; navigating to captured exit',w.label,descent))
     say('Running','Navigating to dry exit of '..w.label)
   end
+  -- What a waypoint does once reached; a "tac_before" event runs first (DL-013), after any barrier.
+  local function dispatch_arrival(now)
+    local w=waypoints[self.index]
+    if w.type=='traverse' then
+      if has_fall(w) then begin_traverse(now) else halt(); begin_water(now) end
+    elseif w.type=='door' then begin_door(now)
+    else advance(now) end
+  end
+  local function arrive(now)
+    local w=waypoints[self.index]
+    if w.tac_before and self.tac_before_for~=self.index then
+      begin_tac('tac_before',w.tac_before,'before '..w.label,function(n) self.tac_before_for=self.index; dispatch_arrival(n) end,now)
+      return
+    end
+    dispatch_arrival(now)
+  end
+  -- Back on the last good waypoint: make sure TAC is in the state that waypoint's events left it (check-first).
+  local function finish_backtrack(now)
+    self.attempt=0
+    local goal=tac_state_after(self.last_good)
+    if goal then
+      local back=waypoints[self.last_good]
+      begin_tac('tac_assert',goal,'after returning to '..back.label,function(n) navigate(n) end,now)
+      return
+    end
+    navigate(now)
+  end
   function self:nearest()
     local p=io.position(); if not p or not io.mesh() then return nil,'Position or navigation mesh unavailable' end
     local best,closest
@@ -184,6 +321,12 @@ function M.new(route,io,opts)
     if io.zone()~=route.zone_short_name then fail('Wrong zone: expected '..route.zone_short_name); return end
     if not io.mesh() then fail('Navigation mesh is unavailable'); return end
     self.selected=index; self.index=index; self.last_good=nil; self.attempt=0; self.backtracked=false
+    self.tac=nil; self.tac_before_for=nil; self.tac_after_for=nil
+    local goal=tac_state_after(index-1)
+    if goal then
+      begin_tac('tac_assert',goal,'before starting at '..waypoints[index].label,function(n) navigate(n) end,now)
+      return
+    end
     navigate(now)
   end
   function self:start_nearest(now)
@@ -196,11 +339,13 @@ function M.new(route,io,opts)
     self:start_nearest(now)
   end
   function self:pause()
-    halt(); self.index=nil; say('Paused','Paused. Resume selects the nearest reachable dry waypoint.')
+    halt(); self.index=nil; self.tac=nil; say('Paused','Paused. Resume selects the nearest reachable dry waypoint.')
+    note_tac_paused('run paused by the user')
   end
   function self:stop()
-    halt(); self.index=nil; self.selected=1; self.last_good=nil; self.phase=nil
+    halt(); self.index=nil; self.selected=1; self.last_good=nil; self.phase=nil; self.tac=nil
     say('Ready','Stopped. Start defaults to the first waypoint.')
+    note_tac_paused('run stopped by the user')
   end
   function self:tick(now)
     if self.status~='Running' and self.status~='Recovering' and self.status~='Waiting for combat' then return end
@@ -209,7 +354,8 @@ function M.new(route,io,opts)
       if zone and zone~=route.zone_short_name and io.position() then
         local door=waypoints[self.index]
         halt(); self.index=nil
-        say('Completed','Zoned through '..door.label..' to '..zone..'. TAC remains in manual mode.')
+        say('Completed','Zoned through '..door.label..' to '..zone..'.')
+        note_tac_paused('route completed')
       elseif now-self.door_click_at>45000 then
         fail('Did not zone after clicking '..waypoints[self.index].label)
       end
@@ -233,7 +379,7 @@ function M.new(route,io,opts)
       io.log('Combat clear for 2000 ms; resuming '..returning..' toward '..w.label)
       if returning=='backtrack' then
         local back=waypoints[self.last_good]
-        if dist(p,back)<=radius(back) then self.attempt=0; navigate(now)
+        if dist(p,back)<=radius(back) then finish_backtrack(now)
         elseif not io.mesh() or not io.path(back) then fail('Could not return to previous known good waypoint')
         else io.nav(back); self.phase='backtrack'; self.started=now
           say('Recovering','Returning to # '..self.last_good..' '..back.label..' after combat') end
@@ -247,6 +393,11 @@ function M.new(route,io,opts)
       else navigate(now) end
       return
     end
+    if TAC_PHASES[self.phase] then
+      io.combat() -- combat is ignored while PTAR sets TAC (DL-013): the character is stationary and about to change TAC anyway
+      tac_tick(now)
+      return
+    end
     if io.combat() and (self.phase=='nav' or self.phase=='backtrack' or self.phase=='door' or self.phase=='ground_exit') then
       local returning=self.phase=='backtrack' and 'backtrack' or (self.phase=='ground_exit' and 'ground_exit' or 'nav')
       halt(); self.phase='combat'; self.combat_return=returning; self.combat_clear_at=nil
@@ -256,7 +407,7 @@ function M.new(route,io,opts)
     if self.phase=='backtrack' then
       local back=waypoints[self.last_good]
       if dist(p,back)<=radius(back) then
-        io.nav_stop(); self.attempt=0; navigate(now)
+        io.nav_stop(); finish_backtrack(now)
       elseif now-self.started>45000 or (now-self.started>3000 and not io.nav_active()) then
         fail('Could not return to previous known good waypoint')
       end
@@ -264,10 +415,7 @@ function M.new(route,io,opts)
     end
     if self.phase=='nav' then
       if dist(p,w)<=radius(w) then
-        if w.type=='traverse' then
-          if has_fall(w) then begin_traverse(now) else halt(); begin_water(now) end
-        elseif w.type=='door' then begin_door(now)
-        else advance(now) end
+        arrive(now)
         return
       end
       local d=dist(p,w)

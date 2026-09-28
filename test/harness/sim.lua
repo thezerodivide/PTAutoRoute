@@ -11,6 +11,8 @@ function M.new()
     feet = false, head = false,
     door_state = false, door_detail = nil, door_click_result = 'clicked',
     role = 'primary', confirmed = {},
+    -- Scripted TAC (DL-013): its real state, whether it answers /ac status, whether commands take effect.
+    tac_actual = 'running', tac_answers = true, tac_applies = true, tac_pending = nil,
     calls = {}, logs = {},
   }
   local function rec(name, ...) s.calls[#s.calls + 1] = { name = name, ... } end
@@ -39,6 +41,19 @@ function M.new()
   io.door_role = function() return s.role end
   io.announce_door_open = function(id) rec('announce', id) end
   io.nav_active = function() return s.nav_active end
+  io.tac_command = function(cmd)
+    rec('tac_command', cmd)
+    if s.tac_applies then s.tac_actual = (cmd == 'pause') and 'paused' or 'running' end
+  end
+  io.tac_query = function()
+    rec('tac_query')
+    s.tac_pending = s.tac_answers and s.tac_actual or nil   -- the answer arrives on a later poll
+  end
+  io.tac_state = function()
+    local v = s.tac_pending
+    s.tac_pending = nil
+    return v
+  end
   s.io = setmetatable(io, { __index = function(_, k) error('sim: RunnerCore called an io function the sim does not implement: ' .. tostring(k), 2) end })
 
   function s.count(name)
