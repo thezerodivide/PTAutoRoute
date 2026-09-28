@@ -261,12 +261,24 @@ local function draw()
         end
         imgui.EndCombo()
       end
-      if imgui.Button('Start') then runner:start(runner.selected,mq.gettime()) end
-      imgui.SameLine(); if imgui.Button('Use Nearest Waypoint') then runner:start_nearest(mq.gettime()) end
+      -- While PTAR is setting TAC (DL-013) Start/Use Nearest/Resume are unavailable for a few seconds; Pause and Stop
+      -- stay enabled. `busy` is read once so BeginDisabled/EndDisabled stay balanced, and clicks are acted on after
+      -- EndDisabled so nothing between the pair can throw.
+      local busy=runner:tac_busy()
+      if busy then imgui.TextColored(1,0.8,0.2,1,'PTAR is setting TAC. Start, Use Nearest Waypoint and Resume are unavailable until it finishes (a few seconds). Pause and Stop still work.') end
+      if busy then imgui.BeginDisabled() end
+      local start_clicked=imgui.Button('Start')
+      imgui.SameLine(); local nearest_clicked=imgui.Button('Use Nearest Waypoint')
+      if busy then imgui.EndDisabled() end
+      if start_clicked then runner:start(runner.selected,mq.gettime()) end
+      if nearest_clicked then runner:start_nearest(mq.gettime()) end
       if imgui.Button('Pause') then runner:pause() end
-      imgui.SameLine(); if imgui.Button('Resume (nearest valid)') then runner:resume(mq.gettime()) end
+      imgui.SameLine()
+      if busy then imgui.BeginDisabled() end
+      local resume_clicked=imgui.Button('Resume (nearest valid)')
+      if busy then imgui.EndDisabled() end
+      if resume_clicked then runner:resume(mq.gettime()) end
       imgui.SameLine(); if imgui.Button('Stop') then runner:stop() end
-      imgui.TextWrapped('TAC stays manual. Marked handoffs stop the runner; continue manually.')
     end
   end
   imgui.End()

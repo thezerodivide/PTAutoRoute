@@ -593,3 +593,41 @@ test('DL-013: completion messages make no claim about TAC', function()
   expect.equal(zr.status, 'Completed')
   expect.falsy(zr.message:find('TAC', 1, true))
 end)
+
+-- The UI grays Start / Use Nearest Waypoint / Resume exactly while Start would be blocked by a TAC phase
+-- (DL-013 Blocking). `tac_busy()` is what it reads; it must not stay true after the phase ends or fails.
+test('DL-013: tac_busy is true exactly while PTAR is setting TAC', function()
+  local fresh = Core.new(far_route(), Sim.new().io)
+  expect.equal(fresh:tac_busy(), false)                    -- nothing running: not busy
+  local r, s, t = at_tac_before()
+  expect.equal(r:tac_busy(), true)
+  r:start(1, t + 10)
+  T.assert_contains(r.message, 'Start/Resume blocked')      -- the block and the flag agree
+  tick_until(r, t, 10000, function() return r.phase == 'traverse_facing' end)
+  expect.equal(r:tac_busy(), false)                        -- phase finished
+end)
+
+test('DL-013: tac_busy is false after an unconfirmed run fails the leg, so the buttons come back', function()
+  local rt = route({ wp('wp_001', 0, 0, 0, { tac_after = 'run' }), wp('wp_002', 0, -100, 0, { type = 'finish', radius = 5 }) })
+  local s = Sim.new()
+  s.tac_actual, s.tac_applies = 'paused', false
+  local r = Core.new(rt, s.io)
+  r:start(1, 1000)
+  r:tick(1100)
+  expect.equal(r:tac_busy(), true)
+  tick_until(r, 1100, 120000, function() return r.status == 'Error' end)
+  expect.equal(r.status, 'Error')
+  expect.equal(r:tac_busy(), false)
+  r:start(1, 200000)                                       -- not blocked by a stale TAC phase
+  expect.falsy(r.message:find('Setting TAC', 1, true))
+  expect.falsy(r.message:find('blocked', 1, true))
+end)
+
+test('DL-013: tac_busy is false after Stop or Pause during a TAC phase', function()
+  local r1 = at_tac_before()
+  r1:stop()
+  expect.equal(r1:tac_busy(), false)
+  local r2 = at_tac_before()
+  r2:pause()
+  expect.equal(r2:tac_busy(), false)
+end)

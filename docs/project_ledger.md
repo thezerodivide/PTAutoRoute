@@ -6,7 +6,7 @@ When new evidence resolves an open question, update this ledger before building 
 
 ## Up next
 
-**[DL-011](decision_log.md#dl-011--add-syntax-checking-and-unit-tests-for-mq-free-modules-priority-item-for-next-session) (syntax checking + unit tests for the MQ-free modules) is done** (local/simulated validation only): design in [DL-012](decision_log.md#dl-012--test-harness-design-lester-vendored--custom-runner-with-per-file-subprocess-isolation), harness and 80 tests committed (`test\check.cmd`). **[DL-013](decision_log.md#dl-013--route-authored-tac-pauserun-events-explicit-opt-in-verified-through-ac-status) (route-authored TAC pause/run events) design is agreed; implementation not started, tests first.** DL-010's implementation stays held.
+**[DL-011](decision_log.md#dl-011--add-syntax-checking-and-unit-tests-for-mq-free-modules-priority-item-for-next-session) (syntax checking + unit tests for the MQ-free modules) is done** (local/simulated validation only): design in [DL-012](decision_log.md#dl-012--test-harness-design-lester-vendored--custom-runner-with-per-file-subprocess-isolation), harness and 80 tests committed (`test\check.cmd`). **[DL-013](decision_log.md#dl-013--route-authored-tac-pauserun-events-explicit-opt-in-verified-through-ac-status) (route-authored TAC pause/run events) is built as `0.2.0-test.23` and waits for a live test** (local/simulated validation only). DL-010's implementation stays held.
 
 ## Dependencies (not yet built)
 
@@ -23,6 +23,9 @@ Implemented code changes not yet confirmed by live testing. Check this before as
 **Opportunistic only** — can't be deliberately engineered, will be confirmed whenever the right conditions occur naturally during ordinary play:
 - [DL-006](decision_log.md#dl-006--ignore-combat-during-traversal-phases-treat-ground_exit-combat-like-normal-nav) (ignore combat during the 7 traverse/water phases; `ground_exit` gets pause-and-resume) — needs combat to overlap a traversal or a `ground_exit` leg.
 - [DL-007](decision_log.md#dl-007--fall-approach-passed-limit-failure-the-2d-distance-formula-not-the-capture-is-wrong) (3D fall-approach distance, `+45` margin) — needs another incline-based ground/water drop to occur.
+
+**Ready for a live test now** — built as `0.2.0-test.23`:
+- [DL-013](decision_log.md#dl-013--route-authored-tac-pauserun-events-explicit-opt-in-verified-through-ac-status) (route-authored TAC pause/run events) — local/simulated only. The key unknown is whether PTAR's `mq.event` catches TAC's `[Triune] status:` line live (PTDR does). Also unverified: the Editor combos' layout, `ImGui.BeginDisabled` inside PTAR, and pause latency when TAC is mid-cast.
 
 **Deliberately testable, just not prioritized yet** — a specific test setup already exists and could be run on demand:
 - [DL-001](decision_log.md#dl-001--block-startresume-during-any-active-traversal-phase)'s diagnostic edge case: pressing "Use Nearest Waypoint" mid-traversal, with zero *other* waypoints currently reachable, should show the traversal-block message rather than the older generic "no reachable waypoint" message. (The core DL-001 guard itself is already fully live-verified — only this one narrow message-routing path remains untested.)

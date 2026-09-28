@@ -338,6 +338,9 @@ function M.new(route,io,opts)
   function self:resume(now)
     self:start_nearest(now)
   end
+  -- True exactly while PTAR is setting TAC (DL-013), i.e. while Start/Resume are blocked; the UI reads it.
+  -- Not derived from `phase`, which keeps its last value after an Error.
+  function self:tac_busy() return self.tac~=nil end
   function self:pause()
     halt(); self.index=nil; self.tac=nil; say('Paused','Paused. Resume selects the nearest reachable dry waypoint.')
     note_tac_paused('run paused by the user')
