@@ -4,6 +4,10 @@ Maintained per [Development_Protocol.txt](Development_Protocol.txt) Section 11. 
 
 When new evidence resolves an open question, update this ledger before building on that conclusion. Do not silently rewrite prior entries — if something here turns out wrong, record the correction and, if the correction is material, add a decision log entry explaining why.
 
+## Up next
+
+**[DL-011](decision_log.md#dl-011--add-syntax-checking-and-unit-tests-for-mq-free-modules-priority-item-for-next-session) (syntax checking + unit tests for the MQ-free modules) is the explicitly agreed first thing to do in the next working session** — ahead of DL-010's implementation or anything else. Not yet started; tooling choice and which modules get tests first are still undecided.
+
 ## Pending Live Verification
 
 Implemented code changes not yet confirmed by live testing. Check this before assuming a fix in the code is validated — cross-reference each with its decision log entry for full context. Move an item out of this section (and update its decision log status) the moment it's confirmed, whichever bucket it's in.
