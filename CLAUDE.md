@@ -9,6 +9,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **[docs/User_Story_Template.md](docs/User_Story_Template.md)** — how new work starts: the developer supplies a user story; Claude drives the requirements conversation (one question at a time, every item labeled Requirement / Assumption / Open, no solutions before acceptance criteria are approved) and records it in the decision log in four labeled blocks. Decisions, risk judgments and acceptance criteria stay the developer's.
 
+- **[docs/lessons_learned.md](docs/lessons_learned.md)** — a running log of lessons from this project, kept for the release retrospective (after v1.0), where the developer triages each entry into Protocol, CLAUDE.md or noise. It is **not** the protocol. Append an entry (with its evidence) whenever a lesson appears; leave the Triage field blank.
+
 The spec and the protocol govern every change made in this repo. Read them in full before a nontrivial behavioral change; the summaries below exist so the core rules are loaded every session without re-reading the full protocol each time, not as a replacement for it.
 
 ## What this is
