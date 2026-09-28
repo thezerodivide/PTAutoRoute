@@ -2,5 +2,8 @@
 config/PTAR/
 config/PTAutoRunner/
 
+# Local read-only copy of the TAC install, for reference only (never commit)
+reference/
+
 # Windows folder metadata
 desktop.ini
