@@ -9,6 +9,7 @@ local combat=require('PTAR.PTARCombat')
 local path_setup=require('PTAR.PTARPaths')
 local version=require('PTAR.PTARVersion')
 local settings_mod=require('PTAR.PTARSettings')
+local tac_module=require('PTAR.PTARTac')
 local running=true
 local filename=nil
 local door_role='primary'
@@ -38,6 +39,11 @@ mq.event('ptar_door_open',"#1# tells the group, '#2#'",function(line,sender,mess
     confirmed_doors[id]=true
     log('Door open confirmation received for door '..id..' from '..tostring(sender))
   end
+end)
+-- TAC status answers (DL-013). Pattern and query-active guard follow PTDeathRecovery; the logic is in PTARTac.
+local tac=tac_module.new(log)
+mq.event('ptar_tac_status','#*#[Triune] status: #1#, mode: #2#, burn: #3##*#',function(line,state,mode,burn)
+  tac:on_status_line(line,state,mode,burn)
 end)
 local function coords(w) return string.format('locyxz %.3f %.3f %.3f',w.y,w.x,w.z) end
 local function read_bool(fn)
@@ -141,6 +147,18 @@ function adapter.announce_door_open(id)
   local cmd='/g PTAR:DOOR:'..tostring(id)..':OPEN'
   log(cmd); mq.cmd(cmd)
 end
+-- TAC control (DL-013): PTAR only pauses or runs TAC where a route's waypoints say so. The acknowledgement line
+-- TAC prints is not treated as proof; the runner verifies through tac_query/tac_state.
+function adapter.tac_command(command)
+  local cmd=(command=='pause') and '/ac pause' or '/ac run'
+  log('ACTION '..cmd..' (acknowledgement is not treated as proof)'); mq.cmd(cmd)
+end
+function adapter.tac_query()
+  mq.flushevents('ptar_tac_status')
+  tac:begin_query()
+  log('ACTION /ac status (TAC state query)'); mq.cmd('/ac status')
+end
+function adapter.tac_state() return tac:take() end
 local function snapshot()
   local p=adapter.position()
   local w=runner and runner.index and route.waypoints[runner.index]
