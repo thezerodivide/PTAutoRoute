@@ -11,6 +11,8 @@ local version=require('PTAR.PTARVersion')
 local settings_mod=require('PTAR.PTARSettings')
 local running=true
 local filename=nil
+local door_role='primary'
+local confirmed_doors={}
 local choices={}
 local runner,route
 local notice='Select a route, then Start.'
@@ -27,6 +29,16 @@ local diag=logger.new(paths.logs,identity,mq.gettime,version.VERSION,echo_fn)
 local function log(message)
   diag:event(message)
 end
+local function save_settings()
+  settings_mod.save(paths.config,identity,{last_route=filename,echo_enabled=diag.echo,door_role=door_role})
+end
+mq.event('ptar_door_open',"#1# tells the group, '#2#'",function(line,sender,message)
+  local id=tonumber(message:match('^PTAR:DOOR:(%d+):OPEN$'))
+  if id and not confirmed_doors[id] then
+    confirmed_doors[id]=true
+    log('Door open confirmation received for door '..id..' from '..tostring(sender))
+  end
+end)
 local function coords(w) return string.format('locyxz %.3f %.3f %.3f',w.y,w.x,w.z) end
 local function read_bool(fn)
   local ok,v=pcall(fn); return ok and v==true
@@ -123,6 +135,12 @@ function adapter.door(w,click_even_if_open)
   if open and not click_even_if_open then return 'open' end
   log('DOOR CLICK '..w.id..' '..w.label); mq.cmd('/click left door'); return 'clicked'
 end
+function adapter.door_role() return door_role end
+function adapter.door_confirmed(id) return confirmed_doors[id]==true end
+function adapter.announce_door_open(id)
+  local cmd='/g PTAR:DOOR:'..tostring(id)..':OPEN'
+  log(cmd); mq.cmd(cmd)
+end
 local function snapshot()
   local p=adapter.position()
   local w=runner and runner.index and route.waypoints[runner.index]
@@ -174,7 +192,7 @@ local function load_route()
   notice='Loaded '..route.route_name..' ('..#route.waypoints..' waypoints). Log: '..diag:path()
   log('Loaded '..path..' with '..#route.waypoints..' waypoints')
   diag:debug('Route load snapshot: '..snapshot())
-  settings_mod.save(paths.config,identity,{last_route=filename,echo_enabled=diag.echo})
+  save_settings()
 end
 local function draw()
   imgui.SetNextWindowSize(ImVec2(520,350),ImGuiCond.FirstUseEver)
@@ -202,7 +220,12 @@ local function draw()
     imgui.SameLine(); if imgui.Button('New / Edit Route') then mq.cmd('/lua run PTAR/PTAREditor') end
     if imgui.Button(diag.echo and 'MQ Console Echo: ON' or 'MQ Console Echo: OFF') then
       diag:set_echo(not diag.echo,snapshot)
-      settings_mod.save(paths.config,identity,{last_route=filename,echo_enabled=diag.echo})
+      save_settings()
+    end
+    if imgui.Button('Door Role: '..(door_role=='primary' and 'Primary' or 'Secondary')) then
+      door_role=door_role=='primary' and 'secondary' or 'primary'
+      log('Door role set to '..door_role)
+      save_settings()
     end
     imgui.TextWrapped(notice)
     if runner then
@@ -233,6 +256,7 @@ end
 
 local settings=settings_mod.read(paths.config,identity)
 if settings.last_route then filename=settings.last_route end
+if settings.door_role then door_role=settings.door_role end
 local echo_default=settings.echo_enabled
 if echo_default==nil then echo_default=version.is_test() end
 diag:set_echo(echo_default,snapshot)
@@ -243,6 +267,7 @@ mq.imgui.init('PTAutoRoute',draw)
 local next_snapshot=0
 while running do
   local ok,err=pcall(function()
+    mq.doevents()
     local now=mq.gettime()
     if runner then runner:tick(now) end
     if now>=next_snapshot then

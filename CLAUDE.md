@@ -65,7 +65,7 @@ If new evidence contradicts the current design, stop and explain the conflict be
 - **PTARCombat.lua** — reads combat/XTarget signals from `mq.TLO.Me`, isolated so the "am I in combat" decision logic can be reasoned about separately from the rest of the adapter.
 - **PTARLog.lua** — file logger (`PTAR_<server>_<character>.log`), size-based rotation to `.old`. Every line is stamped with the running build's version. File logging always writes both EVENT and DEBUG levels unconditionally (no toggle reduces it); a separate `echo` flag controls only whether DEBUG lines are also mirrored to the in-game MQ console via an injected `echo_fn`, keeping this module MQ-free.
 - **PTARVersion.lua** — the single authoritative version string (`VERSION`) and `is_test()` (derived from a `-test.` pre-release segment), required by `PTAR.lua`, `PTAREditor.lua`, and `PTARLog.lua` so the version can't drift between window titles and log lines.
-- **PTARSettings.lua** — per-server/character runtime preferences (last-used route, MQ-console-echo preference), plain `key=value` text with the same atomic tmp/bak/promote save pattern as `PTARFiles.lua`'s route index. Runner-only; the Editor doesn't read or write it.
+- **PTARSettings.lua** — per-server/character runtime preferences (last-used route, MQ-console-echo preference, multi-box door role), plain `key=value` text with the same atomic tmp/bak/promote save pattern as `PTARFiles.lua`'s route index. Runner-only; the Editor doesn't read or write it.
 - **PTAREditor.lua** — the separate Editor process/UI for capturing routes waypoint-by-waypoint at the character's live position. Capture-only by design: never moves the character, clicks doors, targets, or fights.
 
 ### Key design invariants (do not casually violate)
@@ -78,6 +78,7 @@ If new evidence contradicts the current design, stop and explain the conflict be
 - **`/face` heading and `Me.Heading.Degrees()` use opposite numeric conventions** on this game version; always go through `M.face_heading()` in `PTARRunnerCore.lua` when converting between them.
 - **Saves are atomic everywhere** (route data, route index): write `.tmp`, verify, promote over the main file, retain `.bak`. Preserve this pattern in any code that persists files.
 - **Start/Resume must be blocked during any active traversal phase** (spec Section 8/16, listed as a confirmed gap/required fix — check current code state before assuming it's already implemented).
+- **Multi-character door coordination is scoped to `continue`/`finish_open` doors only.** `finish_zone` doors are untouched — every character always clicks its own zoning door and waits for its own zone transition, since zoning can't happen by proxy. Only the `continue`/`finish_open` shared branch checks `io.door_role()`/`io.door_confirmed()`; a `secondary` never clicks a door of that kind, under any circumstance, including its own timeout (see DL-008 — a fallback click there would reintroduce the exact multi-instance race it exists to prevent).
 
 ## Config directory
 

@@ -433,7 +433,14 @@ function M.new(route,io,opts)
         end
         return
       end
-      if state==true then advance(now); return end
+      if state==true or io.door_confirmed(w.door.id) then
+        if state==true and io.door_role()=='primary' then io.announce_door_open(w.door.id) end
+        advance(now); return
+      end
+      if io.door_role()=='secondary' then
+        if now-self.door_since>=8000 then self:leg_failed('No door-open confirmation received for '..w.label,now) end
+        return
+      end
       if state==nil then
         if now-self.door_since>=2000 then
           io.log('Door state unavailable; continuing with the existing Nav and stall fallback: '..w.label)
