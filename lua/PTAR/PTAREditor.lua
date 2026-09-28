@@ -1,5 +1,6 @@
 -- /lua run PTAR/PTAREditor
 -- Manual capture/editor only. No movement, door clicks, targeting, combat or TAC calls.
+-- (It only records the optional TAC before/after events on waypoints, DL-013; the Runner is what sends them.)
 local mq = require('mq')
 local imgui = require('ImGui')
 local core = require('PTAR.PTARRouteData')
@@ -15,7 +16,7 @@ local import_draft={value=''}
 local existing,existing_file={},nil
 local name_draft={value='New Route'}
 local description_draft={value=''}
-local capture={label='',notes='',radius='',manual_handoff=false,door_after='continue',underwater_radius='5',exit_radius='5'}
+local capture={label='',notes='',radius='',manual_handoff=false,door_after='continue',underwater_radius='5',exit_radius='5',tac_before='none',tac_after='none'}
 local traverse_capture=nil
 local action=1
 local running=true
@@ -36,6 +37,14 @@ for _,placement in ipairs({{where='before',label='Before'},{where='after',label=
   end
 end
 local function set_message(s) message=tostring(s or '') end
+-- TAC events (DL-013): the forms hold 'none' | 'pause' | 'run'; a waypoint stores only 'pause' or 'run' (none = no field).
+local function tac_value(v) if v=='pause' or v=='run' then return v end; return nil end
+local function tac_tag(w)
+  local parts={}
+  if w.tac_before then parts[#parts+1]=tostring(w.tac_before)..' before' end
+  if w.tac_after then parts[#parts+1]=tostring(w.tac_after)..' after' end
+  return #parts>0 and (' | TAC: '..table.concat(parts,', ')) or ''
+end
 local function safe_filename(name)
   local generated,err=files.filename(name)
   if not generated then return nil,err end
@@ -84,7 +93,8 @@ local function sync_edit(w)
     door_id=w.door and tostring(w.door.id) or '',door_name=w.door and w.door.name or '',
     door_x=w.door and tostring(w.door.x) or '',door_y=w.door and tostring(w.door.y) or '',door_z=w.door and tostring(w.door.z) or '',
     underwater_radius=w.underwater_target and tostring(w.underwater_target.radius) or '',
-    exit_radius=w.exit and tostring(w.exit.radius) or ''}
+    exit_radius=w.exit and tostring(w.exit.radius) or '',
+    tac_before=w.tac_before or 'none',tac_after=w.tac_after or 'none'}
 end
 local function select(w)
   local id=w and w.id or nil
@@ -113,7 +123,8 @@ local function prepared_fields(draft,kind)
     radius=radius or 3
     if radius>5 then return nil,'Traversal approach radius must be at most 5' end
   end
-  local fields={label=draft.label,type=kind,notes=draft.notes,radius=radius,manual_handoff=draft.manual_handoff}
+  local fields={label=draft.label,type=kind,notes=draft.notes,radius=radius,manual_handoff=draft.manual_handoff,
+    tac_before=tac_value(draft.tac_before),tac_after=tac_value(draft.tac_after)}
   if kind=='door' then
     local d=candidate_door(); if not d then return nil,'Select a door with /doortarget before capture' end
     fields.door={id=d.id,name=d.name,x=d.x,y=d.y,z=d.z}; fields.door_after=draft.door_after
@@ -135,6 +146,7 @@ local function capture_waypoint()
       local er,ee=parse_radius(capture.exit_radius or '',true); if ee then set_message(ee); return end
       traverse_capture={preset=chosen.preset,label=capture.label,notes=capture.notes,radius=r or 3,
         underwater_radius=ur,exit_radius=er,departure=assert(core.round_position(p)),
+        tac_before=tac_value(capture.tac_before),tac_after=tac_value(capture.tac_after),
         anchor_id=w and w.id or nil,step=chosen.preset=='water_cross' and 'target' or 'ledge'}
       set_message('Captured departure and heading. Next: capture '..(traverse_capture.step=='ledge' and 'ledge before the fall.' or 'underwater target.'))
       return
@@ -170,13 +182,14 @@ local function capture_waypoint()
       if not anchor then set_message('Insertion waypoint was removed during capture'); return end
     end
     local created,e=core.create(route,where,anchor,{label=session.label,type='traverse',notes=session.notes,
-      radius=session.radius,phases=phases,ledge=session.ledge,underwater_target=session.target,exit=exit},
+      radius=session.radius,phases=phases,ledge=session.ledge,underwater_target=session.target,exit=exit,
+      tac_before=session.tac_before,tac_after=session.tac_after},
       session.departure,mq.gettime())
     if not created then set_message(e); return end
     local errors=core.validate(route)
     if #errors>0 then core.remove(route,created.id); set_message('Traversal invalid: '..table.concat(errors,'; ')); return end
     traverse_capture=nil; last_creation=created.id; select(created); saved()
-    capture={label='',notes='',radius='',manual_handoff=false,door_after='continue',underwater_radius='5',exit_radius='5'}
+    capture={label='',notes='',radius='',manual_handoff=false,door_after='continue',underwater_radius='5',exit_radius='5',tac_before='none',tac_after='none'}
     if state:match('^Saved') then set_message('Captured '..created.id..' - '..created.label..' with exit.') end
     return
   end
@@ -187,7 +200,7 @@ local function capture_waypoint()
   if not created then set_message(where_or_error); return end
   last_creation=created.id; last_capture={time=now,x=created.x,y=created.y,z=created.z}
   select(created); saved()
-  capture={label='',notes='',radius='',manual_handoff=false,door_after='continue',underwater_radius='5',exit_radius='5'}; action=1
+  capture={label='',notes='',radius='',manual_handoff=false,door_after='continue',underwater_radius='5',exit_radius='5',tac_before='none',tac_after='none'}; action=1
   if state:match('^Saved') then set_message('Captured '..created.id..' - '..created.label) end
 end
 local function do_new()
@@ -235,6 +248,7 @@ local function apply_metadata()
   local old_type=w.type
   w.label=edit.label; w.type=edit.type; w.notes=edit.notes; w.radius=radius
   w.manual_handoff=edit.type=='normal' and (edit.manual_handoff and true or nil) or nil
+  w.tac_before=tac_value(edit.tac_before); w.tac_after=tac_value(edit.tac_after)
   if edit.type~='traverse' then w.phases=nil; w.ledge=nil; w.underwater_target=nil; w.exit=nil end
   if edit.type=='door' then
     local d={id=tonumber(edit.door_id),name=edit.door_name,x=tonumber(edit.door_x),y=tonumber(edit.door_y),z=tonumber(edit.door_z)}
@@ -260,6 +274,16 @@ local function handoff_combo(id,obj)
   if imgui.BeginCombo(id,obj.manual_handoff and 'Manual handoff' or 'Continue route') then
     if imgui.Selectable('Continue route',not obj.manual_handoff) then obj.manual_handoff=false end
     if imgui.Selectable('Manual handoff',obj.manual_handoff) then obj.manual_handoff=true end
+    imgui.EndCombo()
+  end
+end
+local function tac_combo(id,obj,key)
+  local labels={none='None',pause='Pause TAC',run='Run TAC'}
+  local current=obj[key] or 'none'
+  if imgui.BeginCombo(id,labels[current] or labels.none) then
+    for _,choice in ipairs({'none','pause','run'}) do
+      if imgui.Selectable(labels[choice],current==choice) then obj[key]=choice end
+    end
     imgui.EndCombo()
   end
 end
@@ -337,6 +361,10 @@ local function draw()
         imgui.TextWrapped('Next: '..(traverse_capture and next_label[traverse_capture.step] or 'capture departure and heading'))
         if traverse_capture and imgui.Button('Cancel Traversal Capture') then traverse_capture=nil; set_message('Traversal capture canceled; route unchanged.') end
       end
+      tac_combo('TAC before##capture',capture,'tac_before'); tac_combo('TAC after##capture',capture,'tac_after')
+      if kind=='traverse' then
+        imgui.TextWrapped('TAC events are read when the departure is captured. "After" fires once the exit is reached.')
+      end
       if kind=='normal' then handoff_combo('After waypoint##capture',capture) end
       if kind=='door' then
         door_after_combo('After door##capture',capture)
@@ -355,7 +383,7 @@ local function draw()
       for i,w in ipairs(route.waypoints) do
         local previous=route.waypoints[i-1]
         local delta=core.distance(w,previous)
-        local row=string.format('#%d | %s | %s | %s | X %.3f Y %.3f Z %.3f%s',i,w.id,w.label,w.type,w.x,w.y,w.z,delta and string.format(' | from previous %.1f',delta) or '')
+        local row=string.format('#%d | %s | %s | %s | X %.3f Y %.3f Z %.3f%s%s',i,w.id,w.label,w.type,w.x,w.y,w.z,delta and string.format(' | from previous %.1f',delta) or '',tac_tag(w))
         if imgui.Selectable(row..'##'..w.id,selected==w.id) then select(w) end
       end
       local w,index=selected_wp()
@@ -378,6 +406,7 @@ local function draw()
             text_input('Exit radius##edit',edit,'exit_radius')
           end
         end
+        tac_combo('TAC before##edit',edit,'tac_before'); tac_combo('TAC after##edit',edit,'tac_after')
         if edit.type=='normal' then handoff_combo('After waypoint##edit',edit) end
         if edit.type=='door' then
           door_after_combo('After door##edit',edit)
