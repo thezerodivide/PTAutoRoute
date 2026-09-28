@@ -6,7 +6,7 @@ When new evidence resolves an open question, update this ledger before building 
 
 ## Up next
 
-**[DL-011](decision_log.md#dl-011--add-syntax-checking-and-unit-tests-for-mq-free-modules-priority-item-for-next-session) (syntax checking + unit tests for the MQ-free modules) is done** (local/simulated validation only): design in [DL-012](decision_log.md#dl-012--test-harness-design-lester-vendored--custom-runner-with-per-file-subprocess-isolation), harness and 80 tests committed (`test\check.cmd`). DL-010's implementation, still held, is next whenever the developer says go.
+**[DL-011](decision_log.md#dl-011--add-syntax-checking-and-unit-tests-for-mq-free-modules-priority-item-for-next-session) (syntax checking + unit tests for the MQ-free modules) is done** (local/simulated validation only): design in [DL-012](decision_log.md#dl-012--test-harness-design-lester-vendored--custom-runner-with-per-file-subprocess-isolation), harness and 80 tests committed (`test\check.cmd`). **[DL-013](decision_log.md#dl-013--route-authored-tac-pauserun-events-explicit-opt-in-verified-through-ac-status) (route-authored TAC pause/run events) design is agreed; implementation not started, tests first.** DL-010's implementation stays held.
 
 ## Pending Live Verification
 
