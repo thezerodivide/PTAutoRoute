@@ -56,7 +56,9 @@ Note any dependency or shared seam an entry has with another entry (the same hoo
 
 Keep an explicit list, per entry, of what is not yet verified and should not be described as confirmed. Update it as items are resolved; do not let it silently go stale once something is actually verified.
 
-The decision log is append-only. Do not rewrite an earlier entry to reflect a later correction — add a dated addendum to it instead, so the correction and the original reasoning are both visible. The same applies to any other project document maintained continuously (the specification, the ledger): a correction is a visible addition, not an edit that erases what was there before.
+The decision log is append-only: it is a historical record, so do not rewrite an earlier entry to reflect a later correction — add a dated addendum to it instead, so the correction and the original reasoning are both visible.
+
+The specification and the ledger are different documents with a different job: they describe current truth, not history, so update them in place rather than only appending to them. Do not make a future reader reconstruct the current state by reading through layers of correction on top of stale text. A correction to either must still be visible as a correction when it is made — for example, a struck-through line with a note of what changed and why, or an explicit "resolved, see below" — never a silent rewrite that erases the fact that anything changed. The decision log entry that justified the change is the durable record of why; the spec/ledger update is what keeps the document itself trustworthy as a description of the present.
 
 ## 3. Do not invent requirements
 
@@ -83,7 +85,7 @@ When evidence is required, identify the smallest useful test or source inspectio
 
 Do not hide uncertainty by choosing an arbitrary timeout, retry, delay, state assumption, or fallback and then presenting that choice as though the behavior were known.
 
-This same standard applies to your own assumptions about your own tooling and development environment — shell quoting behavior, standard-library functions, exit codes, string escaping, and similar — not only to the target system under development. An assumption about your own tools is just as capable of being wrong as an assumption about the target system, and costs the same rework when it is. Verify by running it, not by recalling how it is supposed to work.
+This same standard applies to your own assumptions about your own tooling and development environment — shell quoting behavior, standard-library functions, exit codes, string escaping, and similar — not only to the target system under development. An assumption about your own tools is just as capable of being wrong as an assumption about the target system, and costs the same rework when it is. Verify by running it, not by recalling how it is supposed to work — for assumptions material to the result, not as a ritual applied to every incidental language or library fact regardless of whether anything depends on it.
 
 It also applies to facts about the developer's own situation — their risk tolerance, operating constraints, and specific setup — not only to the target system's behavior or your own tooling. Ask rather than infer when a recommendation depends on a fact only the developer can supply.
 
@@ -136,7 +138,7 @@ If an implementation choice changes while the requirement does not, the requirem
 
 Before handoff, explicitly compare the build against the current specification.
 
-Every test must cite the specific source of its expected value — a specification line, a decision log entry, or a real log line — in the test itself. Never derive an expected value by running the current implementation and pasting its output; that only proves the test matches what the code currently does, not what it is required to do.
+Every test must cite the specific source of its expected value — a decision log entry ID, a specification section, or a real log line — in the test itself. Prefer a stable identifier (a decision log ID, a named section) over a raw line number where practical, since line numbers go stale as a document is edited even when the requirement itself hasn't changed. Never derive an expected value by running the current implementation and pasting its output; that only proves the test matches what the code currently does, not what it is required to do.
 
 For any test covering logic with real consequences if wrong, prove the test can actually fail: introduce a deliberate, isolated defect in the implementation (a mutation) and confirm the test fails specifically because of that defect, not coincidentally. A test that cannot be shown to fail for the right reason has not been shown to test anything.
 
@@ -186,7 +188,7 @@ Do not reuse a filename for a materially different test build.
 
 Make it easy for me to confirm that I am testing the intended version.
 
-Version numbers must follow **Semantic Versioning (SemVer)**.
+Version numbers must follow **Semantic Versioning (SemVer)**. Use SemVer's pre-release identifiers for diagnostic/test builds (e.g. `0.3.0-test.4`) rather than incrementing the normal release version for every iteration — a build that hasn't earned release status yet shouldn't look like one.
 
 ## 10. Handoff standard
 
@@ -278,13 +280,13 @@ The goal is a small, understandable implementation that faithfully performs the 
 Before asking me a question, determine which category it falls into:
 
 **Category 1 — Resolvable from documentation or source I have access to.**
-If the answer is discoverable in MacroQuest documentation, TAC/Project Triune source, or other material available to you, look it up. Do not ask me.
+If the answer can reasonably be obtained from MacroQuest documentation, TAC/Project Triune source, or other material available to you, check there before asking me. "Reasonably obtainable" is not the same as "probably documented" — if you check and the documentation or source does not actually establish the behavior, the uncertainty is real. Say specifically what you checked and what it failed to resolve, and reclassify the remaining question under Section 4 or Category 2/3 rather than guessing or treating the search itself as having settled it.
 
 > Bad: "Do you know the MacroQuest command to click a door?"
 > Why: This is in the documentation. Asking me makes me a documentation proxy instead of you consulting it directly.
 
 > Bad: "When `MyExpeditionButton` is used with no active expedition, do you know of a repeatable UI state or game message that identifies that condition?"
-> Why: Findable by searching MacroQuest documentation directly.
+> Why: Check the documentation and source first. If they establish the behavior, you didn't need to ask; if they don't, say what you checked and that it's unresolved, rather than asking me to guess in their place.
 
 **Category 2 — Only obtainable through live game state, my hardware, or direct observation.**
 If the answer requires being in-game, reading my screen, or verifying something only I can observe, asking me is correct and necessary. Do not guess, and do not treat an assumption as a substitute.
@@ -316,7 +318,7 @@ A timing value having survived testing without a known failure is evidence that 
 Do not propose changing a timing value based on a bare timeout or stall alone. A timeout firing tells you the operation did not complete in the window; it does not by itself tell you why. Before proposing a change:
 
 1. Identify the specific mechanism of insufficiency from log data — e.g., the character was still descending, still short of the target radius, still mid-crossing, at the moment the timeout fired. A log entry that only shows "operation timed out" is not sufficient evidence on its own.
-2. Rule out other causes the same evidence could support: the timer being too short, an unrelated stall, a dropped input, a momentary interrupt that was not logged as such, or a one-off anomaly.
+2. Reasonably exclude other causes the same evidence could support: the timer being too short, an unrelated stall, a dropped input, a momentary interrupt that was not logged as such, or a one-off anomaly. Absolute elimination usually isn't possible; the evidence needs to make the proposed cause the best explanation, not the only conceivable one.
 3. Bring the evidence for discussion before proposing a specific new value.
 4. Only after discussion, record the change as a decision log entry: old value, new value, and the log evidence that justified the change.
 
@@ -356,9 +358,9 @@ If such work is discovered after the fact without a decision log entry, do not t
 
 ## 20. Design for testability under a constrained runtime
 
-When the target runtime cannot itself be unit tested (an embedded scripting environment, a game client, a hardware-bound API), separate any logic worth testing from the code that binds it to that runtime. The runtime-bound layer should be a thin adapter with no decision logic of its own; the decision logic should be a plain, dependency-free module that the adapter calls into.
+When the target runtime cannot itself be unit tested (an embedded scripting environment, a game client, a hardware-bound API), default to separating deterministic, runtime-independent logic from the code that binds it to that runtime, wherever that separation produces real testability without distorting the design around it. This is what makes the bulk of a system's behavior testable at all outside the live environment, and what makes rapid iteration possible without spending a live test on every logic change.
 
-This is not a stylistic preference — it is what makes the bulk of the system's behavior testable at all outside the live environment, which is what makes rapid iteration possible without spending a live test on every logic change.
+This is a default, not an absolute mandate. Some decision logic is genuinely coupled to runtime state, timing, lifecycle, or event ordering; forcing it into an artificial pure-core/thin-adapter shape just to satisfy this section trades one kind of complexity for another and runs against Sections 3 and 13's warnings against overengineering. When a coupling is genuine, say so, and keep the runtime-bound logic as small and observable as practical instead of forcing a split that doesn't fit.
 
 ## 21. Check for prior art before designing a new mechanism
 
@@ -375,3 +377,5 @@ End a working session at a fixed external cadence — the end of a work day, ali
 Judging "is this decision/milestone actually done yet" in the moment is itself an unreliable stopping rule — it is exactly the kind of call that gets skipped when things are going well. A fixed cadence does not depend on that judgment.
 
 Before ending a session, make sure the project ledger and decision log reflect the current state well enough that the next session — yours or another instance's — can start entirely from them, per Section 11. If a session boundary never forces a cold start, that sufficiency is untested, not confirmed.
+
+The purpose of the fixed cadence is to actually test that sufficiency, not merely to stop working. A boundary that lands mid-investigation is not a flaw in this rule — it is the rule doing its job: if the documentation cannot survive being interrupted there and picked back up cold, that is exactly the gap this section exists to surface, and better to find it on an ordinary day than assume it away because every session so far happened to end at a convenient point.
