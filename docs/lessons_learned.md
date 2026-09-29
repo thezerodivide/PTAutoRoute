@@ -120,3 +120,7 @@ Area: Technical. Suggested: Protocol / CLAUDE.md. Triage:
 **L-027 — Design a tool to be testable by separating its logic from its host bindings.**
 Evidence: `PTARCombat` and `PTARTac` are MacroQuest-free modules, so the query guard and the combat decision are unit-tested; only the thin wiring is parse-checked.
 Area: Technical. Suggested: CLAUDE.md. Triage:
+
+**L-028 — A config mistake can look exactly like a code defect; per-client diagnostic logging is what tells them apart, not a plausible-sounding guess.**
+Evidence: a DL-010 non-happy-path test (populated dungeon, combat, 2026-09-28) showed a door stuck closed for 8s despite a correct identity match (no DL-014-style Target mismatch), then opening cleanly on retry — a pattern that could easily have been misdiagnosed as a game-side click miss or a new code bug. Reading both clients' logs side by side showed the real cause: the developer had forgotten to set `door_role=secondary` on one character before the run, so both clients clicked the same door within 0.3s of each other; the log line `Door role set to secondary`, fired mid-run when the developer corrected it live, pinpointed the exact moment the symptom stopped. Without that log line and the side-by-side comparison, this would have been an unexplained one-off.
+Area: Technical. Suggested: Protocol (reinforces §4/§15 — don't guess at a cause, check the evidence) or CLAUDE.md. Triage:
