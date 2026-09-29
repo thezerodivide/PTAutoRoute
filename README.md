@@ -97,9 +97,13 @@ Exactly one character in the group should be set to **Primary**. Everyone else s
 
 Waypoint synchronization needs no setting. Every character running the same route waits for the others at each waypoint before continuing, so nobody gets far enough ahead to pull a fight alone.
 
-## Triune AutoCombat Integration
+## Triune AutoCombat Setup
 
-A route waypoint can optionally tell PTAR to pause or run TAC.
+Leave TAC in **Manual** mode on every character before running PTAR, and keep it there.
+
+In Manual mode you move and pick targets, and TAC attacks, casts, heals, and uses abilities — it never moves your character on its own. Any other mode (Assist-Chase, Puller, and so on) fights PTAR for control of movement, and modes like Assist-Chase can't follow through the navmesh gaps PTAR's drops and crossings exist to cross in the first place. PTAR itself never starts, stops, or switches TAC's mode; that's on you, once, before Start.
+
+With TAC in Manual, a route waypoint can optionally tell PTAR to pause or run TAC for that stretch of the route.
 
 PTAR only uses:
 
