@@ -14,6 +14,7 @@ local barrier_module=require('PTAR.PTARBarrier')
 local door_match=require('PTAR.PTARDoorMatch')
 local running=true
 local filename=nil
+local start_mode='selected'
 local door_role='primary'
 local confirmed_doors={}
 local choices={}
@@ -249,21 +250,21 @@ local function load_route()
     notice='Route is still being captured; add a Finish or Manual handoff waypoint before running.'; return
   end
   route=loaded; runner=machine.new(route,adapter)
-  notice='Loaded '..route.route_name..' ('..#route.waypoints..' waypoints). Log: '..diag:path()
+  notice='Loaded '..route.route_name..' ('..#route.waypoints..' waypoints).\nLog: '..diag:path()
   log('Loaded '..path..' with '..#route.waypoints..' waypoints')
   diag:debug('Route load snapshot: '..snapshot())
   save_settings()
 end
 local function draw()
-  imgui.SetNextWindowSize(ImVec2(520,350),ImGuiCond.FirstUseEver)
+  imgui.SetNextWindowSize(ImVec2(560,390),ImGuiCond.FirstUseEver)
   imgui.SetNextWindowPos(ImVec2(55,55),ImGuiCond.FirstUseEver)
   local open,visible=imgui.Begin('Project Triune AutoRoute v'..version.VERSION..'###Project Triune AutoRoute',true)
   if open==false then running=false end
   if visible then
-    if imgui.Button('Close Runner') then running=false end
+    imgui.AlignTextToFramePadding(); imgui.Text('Route'); imgui.SameLine()
     local display=filename or '(no routes found)'
     for _,entry in ipairs(choices) do if entry.file==filename then display=entry.label end end
-    if imgui.BeginCombo('Route',display) then
+    if imgui.BeginCombo('##runner_route',display) then
       for _,entry in ipairs(choices) do
         if imgui.Selectable(entry.label..'##'..entry.file,filename==entry.file) then
           if runner and (runner.status=='Running' or runner.status=='Recovering' or runner.status=='Waiting for combat') then
@@ -277,16 +278,7 @@ local function draw()
       if runner and (runner.status=='Running' or runner.status=='Recovering' or runner.status=='Waiting for combat') then notice='Pause or Stop before refreshing routes.'
       else refresh_routes(); load_route() end
     end
-    imgui.SameLine(); if imgui.Button('New / Edit Route') then mq.cmd('/lua run PTAR/PTAREditor') end
-    if imgui.Button(diag.echo and 'MQ Console Echo: ON' or 'MQ Console Echo: OFF') then
-      diag:set_echo(not diag.echo,snapshot)
-      save_settings()
-    end
-    if imgui.Button('Door Role: '..(door_role=='primary' and 'Primary' or 'Secondary')) then
-      door_role=door_role=='primary' and 'secondary' or 'primary'
-      log('Door role set to '..door_role)
-      save_settings()
-    end
+    imgui.SameLine(); if imgui.Button('Open Editor') then mq.cmd('/lua run PTAR/PTAREditor') end
     imgui.TextWrapped(notice)
     if runner then
       imgui.Separator()
@@ -296,14 +288,15 @@ local function draw()
       local current=runner.index and route.waypoints[runner.index]
       imgui.Text('Current: '..(current and string.format('#%d %s',runner.index,current.label) or 'none'))
       local label=string.format('#%d %s [%s, %s]',runner.selected,chosen.label,chosen.type,chosen.id)
-      if imgui.BeginCombo('Start waypoint',label) then
+      imgui.AlignTextToFramePadding(); imgui.Text('Selected waypoint'); imgui.SameLine()
+      if imgui.BeginCombo('##runner_start_waypoint',label) then
         for i,w in ipairs(route.waypoints) do
           local entry=string.format('#%d %s [%s, %s]',i,w.label,w.type,w.id)
           if imgui.Selectable(entry..'##'..w.id,runner.selected==i) then runner.selected=i end
         end
         imgui.EndCombo()
       end
-      -- While PTAR is setting TAC (DL-013) or mid-traversal (DL-001), Start/Use Nearest/Resume are unavailable;
+      -- While PTAR is setting TAC (DL-013) or mid-traversal (DL-001), Start/Resume are unavailable;
       -- Pause and Stop stay enabled. Both `busy` reasons are read fresh from runner state every frame -- never
       -- from `runner.message` -- because the traversal block's old message-based note was found live (2026-09-28)
       -- to get silently overwritten within seconds by the traversal's own routine progress narration, making it
@@ -313,23 +306,54 @@ local function draw()
       local traversal_busy=runner:traversal_blocking()
       local busy=tac_busy or traversal_busy
       if tac_busy then
-        imgui.TextColored(1,0.8,0.2,1,'PTAR is setting TAC. Start, Use Nearest Waypoint and Resume are unavailable until it finishes (a few seconds). Pause and Stop still work.')
+        imgui.TextColored(1,0.8,0.2,1,'PTAR is setting TAC. Starting or resuming is unavailable until it finishes. Pause and Stop still work.')
       elseif traversal_busy then
-        imgui.TextColored(1,0.8,0.2,1,'PTAR is mid-traversal (phase: '..tostring(runner.phase)..'). Start, Use Nearest Waypoint and Resume are unavailable until this phase completes. Pause and Stop still work.')
+        imgui.TextColored(1,0.8,0.2,1,'PTAR is mid-traversal ('..tostring(runner.phase)..'). Starting or resuming is unavailable until this phase completes. Pause and Stop still work.')
       end
       if busy then imgui.BeginDisabled() end
       local start_clicked=imgui.Button('Start')
-      imgui.SameLine(); local nearest_clicked=imgui.Button('Use Nearest Waypoint')
       if busy then imgui.EndDisabled() end
-      if start_clicked then runner:start(runner.selected,mq.gettime()) end
-      if nearest_clicked then runner:start_nearest(mq.gettime()) end
+      imgui.SameLine()
+      local start_labels={selected='At Selected Waypoint',beginning='At Beginning Waypoint',nearest='At Nearest Valid Waypoint'}
+      imgui.SetNextItemWidth(220)
+      if imgui.BeginCombo('##runner_start_method',start_labels[start_mode]) then
+        for _,mode in ipairs({'selected','beginning','nearest'}) do
+          if imgui.Selectable(start_labels[mode],start_mode==mode) then start_mode=mode end
+        end
+        imgui.EndCombo()
+      end
+      if start_clicked then
+        if start_mode=='selected' then runner:start(runner.selected,mq.gettime())
+        elseif start_mode=='beginning' then runner:start(1,mq.gettime())
+        else runner:start_nearest(mq.gettime()) end
+      end
       if imgui.Button('Pause') then runner:pause() end
       imgui.SameLine()
       if busy then imgui.BeginDisabled() end
-      local resume_clicked=imgui.Button('Resume (nearest valid)')
+      local resume_clicked=imgui.Button('Resume at nearest valid')
       if busy then imgui.EndDisabled() end
       if resume_clicked then runner:resume(mq.gettime()) end
       imgui.SameLine(); if imgui.Button('Stop') then runner:stop() end
+      imgui.TextWrapped('Start uses the selected method and restarts the route. Resume finds the nearest reachable waypoint.')
+    end
+    imgui.Separator()
+    imgui.Text('Settings')
+    imgui.AlignTextToFramePadding(); imgui.Text('Door Opening Role'); imgui.SameLine()
+    local role_labels={primary='Primary (only one client)',secondary='Secondary (all other clients)'}
+    imgui.SetNextItemWidth(240)
+    if imgui.BeginCombo('##door_opening_role',role_labels[door_role]) then
+      for _,choice in ipairs({'primary','secondary'}) do
+        if imgui.Selectable(role_labels[choice]..'##door_role',door_role==choice) and door_role~=choice then
+          door_role=choice
+          log('Door role set to '..door_role)
+          save_settings()
+        end
+      end
+      imgui.EndCombo()
+    end
+    if imgui.Button(diag.echo and 'Console debug: ON' or 'Console debug: OFF') then
+      diag:set_echo(not diag.echo,snapshot)
+      save_settings()
     end
   end
   imgui.End()
