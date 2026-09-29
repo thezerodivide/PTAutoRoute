@@ -5,5 +5,8 @@ config/PTAutoRunner/
 # Local read-only copy of the TAC install, for reference only (never commit)
 reference/
 
+# Personal Claude Code settings (this machine's paths, not shared)
+.claude/settings.local.json
+
 # Windows folder metadata
 desktop.ini
