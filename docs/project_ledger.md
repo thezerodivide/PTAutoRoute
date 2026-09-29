@@ -30,8 +30,7 @@ Implemented code changes not yet confirmed by live testing. Check this before as
 **Live-verified, 2026-09-28** — build `0.2.0-test.23`:
 - [DL-013](decision_log.md#dl-013--route-authored-tac-pauserun-events-explicit-opt-in-verified-through-ac-status) (route-authored TAC pause/run events) — the core mechanism is confirmed: PTAR's `mq.event` catches TAC's status line live, pause/run both confirmed on attempt 1 on two characters, the whole three-drop chain (including the navmeshed hallways) stayed paused correctly, and `finish_backtrack`'s check-first logic was exercised live as a bonus. Not specifically checked: the UI graying and the Editor combo layout (visual only, lower risk).
 
-**Deliberately testable, just not prioritized yet** — a specific test setup already exists and could be run on demand:
-- [DL-001](decision_log.md#dl-001--block-startresume-during-any-active-traversal-phase)'s diagnostic edge case: pressing "Use Nearest Waypoint" mid-traversal, with zero *other* waypoints currently reachable, should show the traversal-block message rather than the older generic "no reachable waypoint" message. (The core DL-001 guard itself is already fully live-verified — only this one narrow message-routing path remains untested.)
+- ~~DL-001's diagnostic edge case~~ — **live-verified PASS, 2026-09-28** (`PTAR_multiclass_Erebeth.log`, `21:38:26.464`). DL-001 has no remaining untested paths.
 
 ## Resolved behavior
 
