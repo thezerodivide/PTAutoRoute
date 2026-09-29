@@ -11,6 +11,7 @@ local version=require('PTAR.PTARVersion')
 local settings_mod=require('PTAR.PTARSettings')
 local tac_module=require('PTAR.PTARTac')
 local barrier_module=require('PTAR.PTARBarrier')
+local door_match=require('PTAR.PTARDoorMatch')
 local running=true
 local filename=nil
 local door_role='primary'
@@ -137,14 +138,22 @@ function adapter.door_state(w)
     return tonumber(t.ID()),t.Name(),tonumber(t.X()),tonumber(t.Y()),tonumber(t.Z()),tonumber(t.Distance3D()),t.Open()
   end)
   if not ok then return nil,'SwitchTarget query failed: '..tostring(id) end
-  if id~=d.id or name~=d.name or not x or not y or not z or not distance or distance>35 or
-      math.sqrt((x-d.x)^2+(y-d.y)^2+(z-d.z)^2)>10 then
-    return nil,string.format('Target mismatch: expected %s/%s at %.1f,%.1f,%.1f; observed %s/%s at %s,%s,%s distance %s',
-      tostring(d.id),d.name,d.x,d.y,d.z,tostring(id),tostring(name),tostring(x),tostring(y),tostring(z),tostring(distance))
+  if not distance or distance>35 then
+    return nil,string.format('Target mismatch: player too far from target (distance %s)',tostring(distance))
+  end
+  -- X/Y identity match only (PTARDoorMatch): some doors travel far in Z when they open (a portcullis-style
+  -- gate, confirmed across multiple zones' MQ2Nav door data, 2026-09-28), so matching Z against the captured
+  -- closed-state position produced a false mismatch on exactly this kind of door once it was open.
+  local match_ok,match_detail=door_match.matches({id=id,name=name,x=x,y=y},d)
+  if not match_ok then
+    return nil,string.format('Target mismatch: %s (observed z=%s)',match_detail,tostring(z))
   end
   if open~=true and open~=false then return nil,'Open value unavailable: '..tostring(open) end
-  diag:debug(string.format('DOOR target %s id=%d name=%s xyz=%.2f,%.2f,%.2f distance=%.1f open=%s',
-    w.id,id,name,x,y,z,distance,tostring(open)))
+  -- z is diagnostic-only here (not part of the identity match), so it is formatted defensively: some doors
+  -- travel far enough in Z that it is worth logging, and a missing/non-numeric read must not error the format.
+  local zdisp=type(z)=='number' and string.format('%.2f',z) or tostring(z)
+  diag:debug(string.format('DOOR target %s id=%d name=%s xyz=%.2f,%.2f,%s distance=%.1f open=%s',
+    w.id,id,name,x,y,zdisp,distance,tostring(open)))
   return open
 end
 function adapter.door(w,click_even_if_open)
