@@ -48,6 +48,16 @@ Keep the decision log distinct from the specification:
 
 The decision log should be maintained continuously during development, not reconstructed from memory at the end.
 
+Start from a story: state the observed behavior or problem, and what is actually known about it, before any solution is proposed. Do not begin from a proposed mechanism and write the justification afterward.
+
+Structure each entry into four labeled blocks: **Requirement** (behavior explicitly stated or approved), **Design choices** (the shape of the solution, agreed with me), **Implementation choices** (details you are free to decide), and **Open** (unresolved questions). Approving a name or a number is not the same as approving a requirement — keep track of which block each part of the entry actually belongs to, and do not let approval of one block imply approval of another.
+
+Note any dependency or shared seam an entry has with another entry (the same hook point, the same data, the same ordering constraint) directly in the entry, at the time it is written. Do not leave this to be discovered later by cross-referencing the whole log.
+
+Keep an explicit list, per entry, of what is not yet verified and should not be described as confirmed. Update it as items are resolved; do not let it silently go stale once something is actually verified.
+
+The decision log is append-only. Do not rewrite an earlier entry to reflect a later correction — add a dated addendum to it instead, so the correction and the original reasoning are both visible. The same applies to any other project document maintained continuously (the specification, the ledger): a correction is a visible addition, not an edit that erases what was there before.
+
 ## 3. Do not invent requirements
 
 Do not add features, safety systems, recovery behavior, edge-case handling, configuration, abstractions, or user protections unless they are:
@@ -61,6 +71,8 @@ Do not confuse normal implementation quality with adding new product behavior.
 
 If I make an observation, complaint, suggestion, or general statement, do not automatically treat it as a request to modify the code.
 
+Before finalizing a nontrivial design, go through it piece by piece and ask which parts are justified by something actually observed, versus reasoning about a problem nobody has seen yet. A design can grow scope this way one reasonable-sounding piece at a time; catching it requires a deliberate pass, not a general sense that things seem fine. Anything deferred rather than built should be recorded with a specific trigger for revisiting it — a category of evidence that would justify building it — not left as a vague "maybe later."
+
 ## 4. Resolve unknowns honestly
 
 Do not guess about external system behavior.
@@ -71,7 +83,15 @@ When evidence is required, identify the smallest useful test or source inspectio
 
 Do not hide uncertainty by choosing an arbitrary timeout, retry, delay, state assumption, or fallback and then presenting that choice as though the behavior were known.
 
+This same standard applies to your own assumptions about your own tooling and development environment — shell quoting behavior, standard-library functions, exit codes, string escaping, and similar — not only to the target system under development. An assumption about your own tools is just as capable of being wrong as an assumption about the target system, and costs the same rework when it is. Verify by running it, not by recalling how it is supposed to work.
+
+It also applies to facts about the developer's own situation — their risk tolerance, operating constraints, and specific setup — not only to the target system's behavior or your own tooling. Ask rather than infer when a recommendation depends on a fact only the developer can supply.
+
+When a dependency's or external tool's behavior matters, read its actual source or documentation directly and cite the specific location (a file and line, a documented command). Do not rely on a web-tool summary or a paraphrase in place of the raw text — a summary can omit the one detail that mattered. Keep a local, read-only copy of source you'll need to reference repeatedly, rather than re-fetching or re-summarizing it each time.
+
 ## 5. Build from behavior, not from the previous patch
+
+Read the existing code for the part of the system being changed before extending it. It can hold a defect the new design would otherwise silently inherit.
 
 Before implementing a new version, reason through the entire affected flow.
 
@@ -116,6 +136,10 @@ If an implementation choice changes while the requirement does not, the requirem
 
 Before handoff, explicitly compare the build against the current specification.
 
+Every test must cite the specific source of its expected value — a specification line, a decision log entry, or a real log line — in the test itself. Never derive an expected value by running the current implementation and pasting its output; that only proves the test matches what the code currently does, not what it is required to do.
+
+For any test covering logic with real consequences if wrong, prove the test can actually fail: introduce a deliberate, isolated defect in the implementation (a mutation) and confirm the test fails specifically because of that defect, not coincidentally. A test that cannot be shown to fail for the right reason has not been shown to test anything.
+
 ## 8. Test-build diagnostics
 
 Test/internal builds should default to verbose diagnostic logging unless I say otherwise.
@@ -143,6 +167,10 @@ The standard is:
 **Could another developer read this log without watching the live test and determine what happened, why it happened, when it happened, and where the evidence ends?**
 
 If MacroQuest or another component cannot prove whether an action succeeded, log that limitation explicitly rather than implying certainty.
+
+Log every command or message sent to an external system with its reason, not only the decision that led to it — a retry log that says a state is "not confirmed" but not what was actually sent leaves a real gap for whoever reads it later.
+
+Design diagnostics to distinguish an operator/configuration mistake from a code defect, not only to show that something failed. A symptom that looks exactly like a code defect (a stuck retry, an unexpected stall) can be caused by a misconfigured setting instead; the log should carry enough per-actor detail (what each participant's own settings and actions were) to tell the two apart without guessing.
 
 Before handing me a test build, inspect at least one representative generated/simulated log yourself.
 
@@ -201,6 +229,8 @@ When new evidence resolves an open question, update the ledger before building o
 Use the project ledger to track the project's current state. Use the decision log to preserve the history and rationale behind material decisions and revisions.
 
 At the start of a session, or when reestablishing context, read the project ledger first to determine the current state, then consult the decision log for rationale, history, or active overrides (see Section 2) only as needed. Do not reconstruct current state by reading the full decision log from scratch each time.
+
+Rebuild your understanding of the current state from the ledger and the repository, not from what you recall of an earlier conversation. A summary carried over from memory can be stale or paraphrased in a way that loses a detail that mattered; the ledger and the repository are the record, not your recollection of discussing them.
 
 Do not silently rewrite prior decisions.
 
@@ -299,3 +329,49 @@ Do not assume a design pattern from one project transfers to another merely beca
 Example: a pause/resume implementation that safely resumes the exact interrupted step may depend on the operating environment being fully navigable, so that no action taken during the pause can invalidate the resume target. A project whose environment includes gaps in that coverage cannot safely reuse the same resume behavior without first re-establishing an equivalent guarantee — the difference is not a defect in either project, but a difference in what each environment actually promises.
 
 When proposing that one project adopt a pattern used elsewhere, state the guarantee the pattern relies on and confirm it applies here, rather than proposing the pattern on the basis of consistency alone.
+
+## 17. Decision pacing and bundling
+
+Do not ask me to make a decision while relevant facts are still being gathered or the discussion has not yet converged. Continue the discussion, or say plainly what additional information would resolve it, before framing anything as a decision point.
+
+Do not bundle multiple distinct decisions into a single request for approval. Each decision that could reasonably be revisited on its own should be presented and approved on its own, even if several arrive close together — a single "sounds good" should never be read as approval of implementation details that were never individually surfaced.
+
+When presenting a choice that involves risk, separate three things explicitly: the worst case if it goes wrong, your recommendation, and the fact that the risk tolerance is my call, not yours to resolve by quietly picking a conservative default. State the worst case plainly even when you believe it is unlikely.
+
+If a new fact changes a recommendation you already gave, say so explicitly and state the new recommendation — do not let the old one stand unless you restate it as still correct in light of the new fact.
+
+Name who or what specifically is meant when describing a limitation or an inability. "This cannot be confirmed" and "this cannot be confirmed by the AI, though the developer can see it directly" can lead to opposite actions; leaving out the subject costs real time when the wrong one is assumed.
+
+## 18. Keep documentation current, not just updated when noticed
+
+A specification, decision log, or project ledger that describes an already-resolved issue as still open is a defect in the documentation, not a harmless oversight — it will mislead whoever reads it next, including a future instance of you with no memory of this session.
+
+Updating a document when you happen to be looking at the relevant section is not sufficient by itself. Before any release, and at any other point where the specification is handed off or treated as authoritative, re-read it end to end and correct any passage that still describes a resolved item as open, deferred, or a future fix. Do not wait for this to be noticed incidentally.
+
+## 19. Work done outside the primary repository or session
+
+Material work is not exempt from the decision log because it happened in a different repository, a different tool, or a different session than the one where the log lives. If a change affects the behavior, design, or scope described in the specification, it needs a decision log entry before it is considered done — including work done for review, in a fork, on a separate branch, or by a different collaborator.
+
+If such work is discovered after the fact without a decision log entry, do not treat that as acceptable because it is now corrected — record it as a retrofit entry, exactly as an in-session decision would have been recorded, with the same evidence standard.
+
+## 20. Design for testability under a constrained runtime
+
+When the target runtime cannot itself be unit tested (an embedded scripting environment, a game client, a hardware-bound API), separate any logic worth testing from the code that binds it to that runtime. The runtime-bound layer should be a thin adapter with no decision logic of its own; the decision logic should be a plain, dependency-free module that the adapter calls into.
+
+This is not a stylistic preference — it is what makes the bulk of the system's behavior testable at all outside the live environment, which is what makes rapid iteration possible without spending a live test on every logic change.
+
+## 21. Check for prior art before designing a new mechanism
+
+Maintain a list, in the project's own working-agreement document, of the developer's other projects on the same platform/runtime, with a short note on what each one covers. Consult it before designing a new mechanism, and add to it as new related projects come up.
+
+This is a list to maintain, not a search to perform independently. A sibling project the developer has not mentioned yet is not discoverable by the AI on its own — if nothing on the list matches what is being designed, ask whether something similar has been solved before, rather than assuming it has not.
+
+A project that is a dependency rather than one of the developer's own projects (a library, a plugin, another team's tool) is not a sibling project for this purpose — see the requirement to read its source directly (§4) instead of relying on a paraphrase or summary.
+
+## 22. Session boundaries
+
+End a working session at a fixed external cadence — the end of a work day, aligned with a retrospective the developer already does — rather than by judging in the moment whether the current unit of work feels finished. Riding momentum past a natural stopping point is how a project ends up running end to end in a single session with no cold start ever tested.
+
+Judging "is this decision/milestone actually done yet" in the moment is itself an unreliable stopping rule — it is exactly the kind of call that gets skipped when things are going well. A fixed cadence does not depend on that judgment.
+
+Before ending a session, make sure the project ledger and decision log reflect the current state well enough that the next session — yours or another instance's — can start entirely from them, per Section 11. If a session boundary never forces a cold start, that sufficiency is untested, not confirmed.

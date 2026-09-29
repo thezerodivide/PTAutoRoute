@@ -105,3 +105,12 @@ Rules (full text in DL-012):
 ## Config directory
 
 `config/` and `logs/` mirror the MacroQuest folder layout this suite expects at runtime (`macroquest/config/<name>/`, `macroquest/logs/<name>/`) — the actual per-server route files (`PTAR_*.lua`), the route index (`PTAR_Routes.txt`), and their `.bak`/`.tmp` counterparts live there. These are runtime/user data, not build artifacts.
+
+## Related projects (Development Protocol §21)
+
+Other projects by this developer, same MacroQuest/Project Triune platform, checked for prior art before designing a new mechanism here. Add to this list as new related projects come up; if nothing here matches what's being designed, ask rather than assume none exists.
+
+- **PTDeathRecovery** (`lua/PTDR.lua`) — death detection/recovery. Source of the verified `/ac status` query-guard pattern (query-active guard, treat acknowledgement as not proof, bounded retries) that DL-013's TAC pause/run events took their shape from.
+- **PTItemEvolver** (`https://github.com/thezerodivide/PTItemEvolver`) — item evolution queue management. Its `README.md` was used as the template for this project's own README (plain declarative style, Safety/Logging/Commands/Version sections).
+
+Not a sibling project (third-party dependency, not by this developer) — see [reference/TAC](../reference/TAC) instead, per the "read raw source, don't trust a paraphrase" practice: **TAC (Triune AutoCombat)**.
