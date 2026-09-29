@@ -6,7 +6,7 @@ When new evidence resolves an open question, update this ledger before building 
 
 ## Up next
 
-**[DL-010](decision_log.md#dl-010--multi-client-waypoint-barrier-sync-agreed-design-implementation-deliberately-held)'s barrier mechanism is now live-verified** (two-character test, 2026-09-28). That test also surfaced **[DL-014](decision_log.md#dl-014--door-identity-match-drops-z-some-doors-travel-far-in-z-when-opening-portcullis-style-gates) (door identity match drops Z)**, built as `0.2.0-test.26` and waiting for its own live re-test at the door that found the problem. The "Door Role" UI label question is resolved: deferred to the separate pre-1.0 UI design pass, left as-is until then.
+**[DL-014](decision_log.md#dl-014--door-identity-match-drops-z-some-doors-travel-far-in-z-when-opening-portcullis-style-gates) (door identity match drops Z) is now live-verified** at the door that found the problem (`0.2.0-test.26`, 2026-09-28) — see Resolved behavior below. That same run gave a second, independent confirmation of **[DL-010](decision_log.md#dl-010--multi-client-waypoint-barrier-sync-agreed-design-implementation-deliberately-held)'s barrier mechanism**. Still open on DL-010: the `mq.TLO.Group.Member` self-exclusion and chat-ordering assumptions, and the primary-drops gap. The "Door Role" UI label question is resolved: deferred to the separate pre-1.0 UI design pass, left as-is until then.
 
 ## Dependencies (not yet built)
 
@@ -31,8 +31,7 @@ Implemented code changes not yet confirmed by live testing. Check this before as
 **Ready for a live test now** — built as `0.2.0-test.25`:
 - [DL-010](decision_log.md#dl-010--multi-client-waypoint-barrier-sync-agreed-design-implementation-deliberately-held) (multi-client waypoint barrier sync) — **the barrier mechanism itself is now live-verified** (two-character test, 2026-09-28: `expected`/`seen` matched exactly between both characters across 44–47 releases each, zero timeouts, correct behavior through retries and a backtrack). Still needs live confirmation of the `mq.TLO.Group.Member` assumption specifically excluding self (not contradicted, but not directly isolated either) and the chat-ordering assumption (not contradicted — every `REACHED` was seen before it was needed).
 
-**Ready for a live test now** — built as `0.2.0-test.26`:
-- [DL-014](decision_log.md#dl-014--door-identity-match-drops-z-some-doors-travel-far-in-z-when-opening-portcullis-style-gates) (door identity match drops Z) — local/simulated only (unit-tested, mutation-checked, plus a one-off stubbed integration diagnostic using the real live-observed numbers). Needs a live re-test at the actual door (#44, Sleeper's Tomb) that found the problem, ideally with the same two-character Primary/Secondary setup.
+- ~~DL-014~~ — **live-verified 2026-09-28, moved to Resolved behavior below.**
 
 - ~~DL-001's diagnostic edge case~~ — **live-verified PASS, 2026-09-28** (`PTAR_multiclass_Erebeth.log`, `21:38:26.464`).
 - ~~DL-001's follow-up usability fix~~ (block message was overwritten within seconds by routine narration; fixed with a live-recomputed `traversal_blocking()` query and UI graying, `v0.2.0-test.24`) — **live-verified PASS, 2026-09-28**, screenshot + developer confirmation: the yellow explanation line stayed visible through ongoing traversal progress, and Start/Use Nearest/Resume all rendered visibly dimmed together while Pause/Stop stayed normal. DL-001 has no remaining untested paths.
@@ -65,6 +64,7 @@ Behavior actually agreed upon (source: [PTAR_Rebaseline_Spec.md](PTAR_Rebaseline
 - **[DL-002](decision_log.md#dl-002--mq-console-echo-toggle-per-line-version-stamping-single-authoritative-version-source)/[DL-003](decision_log.md#dl-003--persist-last-used-route-and-mq-console-echo-preference-per-servercharacter)** (version source, MQ-console echo, persisted settings): implemented, **live-verified PASS**, 2026-09-27. Shipped as `v0.2.0-test.20`.
 - **[DL-004](decision_log.md#dl-004--rename-the-ptautorunner-folder)/[DL-005](decision_log.md#dl-005--remove-routelog-file-relocation-on-launch-behavior-before-release)** (folder rename to `PTAR`, relocation-on-launch removed): implemented, **live-verified PASS**, 2026-09-27. Shipped as `v0.2.0-test.21`. All five of Section 21's original fixes now implemented and verified.
 - **[DL-008](decision_log.md#dl-008--multi-character-door-coordination-via-group-chat-primarysecondary-roles)** (multi-character door coordination via group chat): implemented, **live-verified PASS**, 2026-09-27. Shipped as `v0.2.0-test.22`.
+- **[DL-014](decision_log.md#dl-014--door-identity-match-drops-z-some-doors-travel-far-in-z-when-opening-portcullis-style-gates)** (door identity match drops Z, for portcullis-style gates that travel in Z when opening): implemented, **live-verified PASS**, 2026-09-28, at door #44 (Sleeper's Tomb, the door that found the problem) — clean `open=true` confirmation through the door's full Z travel, zero `Target mismatch` lines, Primary announced correctly. Shipped as `v0.2.0-test.26`.
 
 ## Confirmed live/system facts
 
