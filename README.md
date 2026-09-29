@@ -174,7 +174,11 @@ PTAR is designed to fail a leg outright rather than guess when it can't verify w
 
 ## Wanting more detail
 
-This README covers what you need to capture and run a route. For the full behavioral specification, the reasoning behind specific design decisions, and the history of what's been tested and how, see:
+This README covers what you need to capture and run a route. For every option the Editor and Runner expose — including the less obvious ones, like what happens if you change an existing traversal waypoint's type — see:
+
+- [`docs/Advanced_User_Guide.md`](docs/Advanced_User_Guide.md) — the full option reference, field by field.
+
+For the behavioral specification, the reasoning behind specific design decisions, and the history of what's been tested and how, see:
 
 - [`docs/PTAR_Rebaseline_Spec.md`](docs/PTAR_Rebaseline_Spec.md) — the full specification.
 - [`docs/decision_log.md`](docs/decision_log.md) — why specific behaviors work the way they do, with the evidence behind each one.
