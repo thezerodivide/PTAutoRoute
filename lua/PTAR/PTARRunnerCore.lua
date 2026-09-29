@@ -19,6 +19,7 @@ local TAC_PHASES={tac_before=true,tac_after=true,tac_assert=true}
 local TAC_ANSWER_MS=5000        -- wait for an /ac status answer
 local TAC_MAX_ATTEMPTS=3        -- first attempt plus 2 retries
 local TAC_RETRY_SPACING_MS=1000 -- pause between attempts
+local BARRIER_TIMEOUT_MS=120000 -- first guess, not measured (Protocol section 15): DL-010
 local function tac_word(command) return command=='pause' and 'paused' or 'running' end
 
 function M.new(route,io,opts)
@@ -274,7 +275,7 @@ function M.new(route,io,opts)
     io.log(string.format('GROUND DROP LANDED %s descent %.1f Z; navigating to captured exit',w.label,descent))
     say('Running','Navigating to dry exit of '..w.label)
   end
-  -- What a waypoint does once reached; a "tac_before" event runs first (DL-013), after any barrier.
+  -- What a waypoint does once reached; a "tac_before" event runs first (DL-013), after any barrier (DL-010).
   local function dispatch_arrival(now)
     local w=waypoints[self.index]
     if w.type=='traverse' then
@@ -282,13 +283,49 @@ function M.new(route,io,opts)
     elseif w.type=='door' then begin_door(now)
     else advance(now) end
   end
-  local function arrive(now)
+  -- Runs after the barrier releases: tac_before, then the waypoint's own action (agreed arrival order, DL-010).
+  local function after_barrier(now)
     local w=waypoints[self.index]
     if w.tac_before and self.tac_before_for~=self.index then
       begin_tac('tac_before',w.tac_before,'before '..w.label,function(n) self.tac_before_for=self.index; dispatch_arrival(n) end,now)
       return
     end
     dispatch_arrival(now)
+  end
+  -- Waypoint barrier (DL-010): every participant waits until the others still tracked have also reached this
+  -- waypoint. REACHED is sent unconditionally on arrival, before the barrier is evaluated at all, so a client
+  -- that later miscounts or proceeds early never withholds its own bark -- the stall scenario this rule
+  -- prevents is only possible if the bark were sent on release instead.
+  local function check_barrier(now)
+    local w=waypoints[self.index]
+    local roster=io.barrier_roster()
+    local seen=io.barrier_seen(w.id)
+    local missing={}
+    for _,name in ipairs(roster) do if not seen[name] then missing[#missing+1]=name end end
+    if #missing==0 then
+      local seen_list={}; for name in pairs(seen) do seen_list[#seen_list+1]=name end; table.sort(seen_list)
+      io.log(string.format('Barrier released %s: expected [%s], seen [%s]',w.id,table.concat(roster,','),table.concat(seen_list,',')))
+      if w.type=='door' then io.clear_door_confirmed(w.door.id) end
+      after_barrier(now)
+      return
+    end
+    if now-self.barrier_started>=BARRIER_TIMEOUT_MS then
+      io.log(string.format('Barrier TIMEOUT %s: proceeding without [%s] (expected [%s], waited %dms)',
+        w.id,table.concat(missing,','),table.concat(roster,','),now-self.barrier_started))
+      if w.type=='door' then io.clear_door_confirmed(w.door.id) end
+      after_barrier(now)
+    end
+  end
+  -- Just reached a waypoint (by any means: ordinary nav, already-within-radius, etc). Barrier-wait is
+  -- deliberately NOT in TRAVERSAL_PHASES/TAC_PHASES: Start/Resume/Use-Nearest stay unguarded (a wait can run up
+  -- to BARRIER_TIMEOUT_MS and recurs at every waypoint, unlike the brief TAC/traversal blocks), and combat here
+  -- gets ordinary pause-and-resume, joining nav/backtrack/door/ground_exit -- this is real navmesh, not a gap.
+  local function arrive(now)
+    local w=waypoints[self.index]
+    io.barrier_announce(w.id)
+    self.phase='barrier_wait'; self.barrier_started=now
+    say('Running','Waiting for the group at '..w.label..' ('..w.id..')')
+    check_barrier(now)
   end
   -- Back on the last good waypoint: make sure TAC is in the state that waypoint's events left it (check-first).
   local function finish_backtrack(now)
@@ -322,6 +359,7 @@ function M.new(route,io,opts)
     if not io.mesh() then fail('Navigation mesh is unavailable'); return end
     self.selected=index; self.index=index; self.last_good=nil; self.attempt=0; self.backtracked=false
     self.tac=nil; self.tac_before_for=nil; self.tac_after_for=nil
+    io.barrier_clear() -- DL-010: a fresh run must not pass every waypoint instantly on stale barrier state
     local goal=tac_state_after(index-1)
     if goal then
       begin_tac('tac_assert',goal,'before starting at '..waypoints[index].label,function(n) navigate(n) end,now)
@@ -345,6 +383,10 @@ function M.new(route,io,opts)
   -- every call, not from `message` -- the message-based block note was found live (2026-09-28) to get silently
   -- overwritten within seconds by the traversal's own routine progress narration, making it easy to miss.
   function self:traversal_blocking() return TRAVERSAL_PHASES[self.phase]==true end
+  -- Whether a PTAR:HERE heartbeat should be sent right now (DL-010): only while actively trying to complete the
+  -- route, so an errored, paused, stopped, dead or completed client drops out of everyone's roster quickly
+  -- instead of holding a barrier open. The rule lives here, not in the adapter, so it is unit-tested.
+  function self:heartbeat_active() return self.status=='Running' or self.status=='Recovering' or self.status=='Waiting for combat' end
   function self:pause()
     halt(); self.index=nil; self.tac=nil; say('Paused','Paused. Resume selects the nearest reachable dry waypoint.')
     note_tac_paused('run paused by the user')
@@ -390,6 +432,8 @@ function M.new(route,io,opts)
         elseif not io.mesh() or not io.path(back) then fail('Could not return to previous known good waypoint')
         else io.nav(back); self.phase='backtrack'; self.started=now
           say('Recovering','Returning to # '..self.last_good..' '..back.label..' after combat') end
+      elseif returning=='barrier_wait' then
+        self.phase='barrier_wait'; check_barrier(now)
       elseif returning=='ground_exit' then
         local exit=w.exit
         if dist(p,exit)<=exit.radius then
@@ -405,12 +449,14 @@ function M.new(route,io,opts)
       tac_tick(now)
       return
     end
-    if io.combat() and (self.phase=='nav' or self.phase=='backtrack' or self.phase=='door' or self.phase=='ground_exit') then
-      local returning=self.phase=='backtrack' and 'backtrack' or (self.phase=='ground_exit' and 'ground_exit' or 'nav')
+    if io.combat() and (self.phase=='nav' or self.phase=='backtrack' or self.phase=='door' or self.phase=='ground_exit' or self.phase=='barrier_wait') then
+      local returning=self.phase=='backtrack' and 'backtrack' or (self.phase=='ground_exit' and 'ground_exit' or
+        (self.phase=='barrier_wait' and 'barrier_wait' or 'nav'))
       halt(); self.phase='combat'; self.combat_return=returning; self.combat_clear_at=nil
       say('Waiting for combat','Combat interrupted '..w.label..'; keeping the current waypoint and retries.')
       return
     end
+    if self.phase=='barrier_wait' then check_barrier(now); return end
     if self.phase=='backtrack' then
       local back=waypoints[self.last_good]
       if dist(p,back)<=radius(back) then

@@ -6,15 +6,13 @@ When new evidence resolves an open question, update this ledger before building 
 
 ## Up next
 
-**[DL-011](decision_log.md#dl-011--add-syntax-checking-and-unit-tests-for-mq-free-modules-priority-item-for-next-session) (syntax checking + unit tests for the MQ-free modules) is done** (local/simulated validation only): design in [DL-012](decision_log.md#dl-012--test-harness-design-lester-vendored--custom-runner-with-per-file-subprocess-isolation), harness and 80 tests committed (`test\check.cmd`). **[DL-013](decision_log.md#dl-013--route-authored-tac-pauserun-events-explicit-opt-in-verified-through-ac-status) (route-authored TAC pause/run events) is built as `0.2.0-test.23` and waits for a live test** (local/simulated validation only). DL-010's implementation stays held.
+**[DL-010](decision_log.md#dl-010--multi-client-waypoint-barrier-sync-agreed-design-implementation-deliberately-held) (multi-client waypoint barrier sync) is built as `0.2.0-test.25` and waits for a live multi-client test** (local/simulated validation only). Needs a live check of the `mq.TLO.Group.Member` assumption and the chat-ordering assumption. One open, non-code item for the developer: whether to relabel the "Door Role" UI button so it doesn't read as if it also governs waypoint sync.
 
 ## Dependencies (not yet built)
 
 Only unbuilt entries are listed; everything else is delivered. Reasoning and order rules live in the entries.
 
-- **[DL-010](decision_log.md#dl-010--multi-client-waypoint-barrier-sync-agreed-design-implementation-deliberately-held)** — depends on DL-008, DL-012.
-- **[DL-013](decision_log.md#dl-013--route-authored-tac-pauserun-events-explicit-opt-in-verified-through-ac-status)** — depends on DL-001, DL-006, DL-012.
-- **DL-010 and DL-013 share the runner's arrival and completion seams.** Agreed arrival order: barrier release, then `tac_before`, then the action. **The last item blocking implementation start is now resolved (2026-09-28): the barrier-wait phase is unguarded for Start/Resume (unlike TAC/traversal phases) and combat there gets ordinary pause-and-resume (joining nav/backtrack/door/ground_exit), not ignore-combat.** Ready to build, tests first, whenever the developer says go. Still-open, non-blocking: the primary-drops gap and the chat-ordering assumption (see the entry).
+Everything below is now built; nothing remains in this section as of `0.2.0-test.25` (2026-09-28).
 
 ## Pending Live Verification
 
@@ -29,6 +27,9 @@ Implemented code changes not yet confirmed by live testing. Check this before as
 
 **Live-verified, 2026-09-28** — build `0.2.0-test.23`:
 - [DL-013](decision_log.md#dl-013--route-authored-tac-pauserun-events-explicit-opt-in-verified-through-ac-status) (route-authored TAC pause/run events) — the core mechanism is confirmed: PTAR's `mq.event` catches TAC's status line live, pause/run both confirmed on attempt 1 on two characters, the whole three-drop chain (including the navmeshed hallways) stayed paused correctly, and `finish_backtrack`'s check-first logic was exercised live as a bonus. The UI graying mechanism itself is now live-confirmed too (via DL-001's shared fix, below) — not yet observed during a TAC phase specifically, but it's the identical code path. Editor combo layout still not specifically checked.
+
+**Ready for a live test now** — built as `0.2.0-test.25`:
+- [DL-010](decision_log.md#dl-010--multi-client-waypoint-barrier-sync-agreed-design-implementation-deliberately-held) (multi-client waypoint barrier sync) — local/simulated only, plus a one-off diagnostic that drove the real `PTAR.lua` with a fabricated teammate and produced a correct wait-then-release sequence. Needs a genuine multi-client live test. Two specific unknowns: whether `mq.TLO.Group.Member(i)` actually enumerates group members other than the local character (assumed from documentation, not yet checked), and whether group chat is relayed in the order sent (the door-confirmation-clearing rule assumes every client sees a `REACHED` bark before a later `OPEN`).
 
 - ~~DL-001's diagnostic edge case~~ — **live-verified PASS, 2026-09-28** (`PTAR_multiclass_Erebeth.log`, `21:38:26.464`).
 - ~~DL-001's follow-up usability fix~~ (block message was overwritten within seconds by routine narration; fixed with a live-recomputed `traversal_blocking()` query and UI graying, `v0.2.0-test.24`) — **live-verified PASS, 2026-09-28**, screenshot + developer confirmation: the yellow explanation line stayed visible through ongoing traversal progress, and Start/Use Nearest/Resume all rendered visibly dimmed together while Pause/Stop stayed normal. DL-001 has no remaining untested paths.
@@ -90,7 +91,7 @@ Questions intentionally unresolved — do not decide these unilaterally; surface
 - **Full UI redesign, both Runner and Editor windows (spec §11, §20):** current layout for both windows is not considered satisfactory; a redesign is planned as a future revision and is explicitly out of scope for the current spec document.
 - **TAC integration, if ever added (spec §3, §15):** out of scope for this version; if added later, scope is explicitly limited to starting TAC in Manual mode when the user presses Start — no broader TAC state management. Not a current open question, but noted so a broader TAC integration is never assumed in without a fresh scoping discussion.
 - **[DL-009](decision_log.md#dl-009--levitate-breaks-ground-drop-traversal-fall-detection-known-limitation-deferred)** — Levitate breaks ground-drop fall-detection: confirmed, deliberately deferred as a known limitation (don't levitate before a fall-based traversal).
-- **[DL-010](decision_log.md#dl-010--multi-client-waypoint-barrier-sync-agreed-design-implementation-deliberately-held)** — multi-client waypoint barrier sync (solves the DL-008-discovered drift/combat-desync problem): design fully agreed, amended 2026-09-28 (message names, door-confirmation staleness resolved by clearing on barrier release, no door-specific radius); implementation not started. Scope reduced after an over-engineering review (build the core barrier + active-only heartbeat + proceed-on-timeout; traversal-departure choreography and other extras deferred until live logs justify them). Open: primary-drops gap (nobody left to click doors). Ready to build, tests first, whenever the developer says go.
+- **[DL-010](decision_log.md#dl-010--multi-client-waypoint-barrier-sync-agreed-design-implementation-deliberately-held)** — multi-client waypoint barrier sync (solves the DL-008-discovered drift/combat-desync problem): design fully agreed, **built as `0.2.0-test.25`, 2026-09-28** (see Pending Live Verification above), local/simulated validation only. Scope reduced after an over-engineering review (built the core barrier + active-only heartbeat + proceed-on-timeout; traversal-departure choreography and other extras deferred until live logs justify them). Open: primary-drops gap (nobody left to click doors); whether to relabel "Door Role".
 
 ## Out of scope
 

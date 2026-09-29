@@ -10,6 +10,7 @@ local path_setup=require('PTAR.PTARPaths')
 local version=require('PTAR.PTARVersion')
 local settings_mod=require('PTAR.PTARSettings')
 local tac_module=require('PTAR.PTARTac')
+local barrier_module=require('PTAR.PTARBarrier')
 local running=true
 local filename=nil
 local door_role='primary'
@@ -44,6 +45,17 @@ end)
 local tac=tac_module.new(log)
 mq.event('ptar_tac_status','#*#[Triune] status: #1#, mode: #2#, burn: #3##*#',function(line,state,mode,burn)
   tac:on_status_line(line,state,mode,burn)
+end)
+-- Waypoint barrier (DL-010). Roster membership needs both group presence and a recent heartbeat; the heartbeat
+-- carries no progress/waypoint/door information at all, by design -- its only job is roster liveness.
+local barrier=barrier_module.new()
+local HEARTBEAT_INTERVAL_MS=5000  -- first guess, not measured (Protocol section 15)
+local ROSTER_EXPIRY_MS=15000      -- first guess, not measured (Protocol section 15)
+mq.event('ptar_here',"#1# tells the group, 'PTAR:HERE'",function(line,sender)
+  barrier:heartbeat(sender,mq.gettime())
+end)
+mq.event('ptar_waypoint_reached',"#1# tells the group, 'PTAR:WAYPOINT:#2#:REACHED'",function(line,sender,waypoint_id)
+  barrier:record_reached(waypoint_id,sender)
 end)
 local function coords(w) return string.format('locyxz %.3f %.3f %.3f',w.y,w.x,w.z) end
 local function read_bool(fn)
@@ -159,6 +171,27 @@ function adapter.tac_query()
   log('ACTION /ac status (TAC state query)'); mq.cmd('/ac status')
 end
 function adapter.tac_state() return tac:take() end
+-- Waypoint barrier (DL-010): roster is live group membership filtered to those with a recent heartbeat.
+-- Assumption, not yet live-verified (Protocol section 4): mq.TLO.Group.Member(i) enumerates OTHER group
+-- members, not the local character, matching documented MacroQuest Group TLO semantics.
+function adapter.barrier_roster()
+  local candidates={}
+  local ok,count=pcall(function() return mq.TLO.Group.Members() end)
+  if ok and count then
+    for i=1,count do
+      local ok2,name=pcall(function() return mq.TLO.Group.Member(i).Name() end)
+      if ok2 and name and name~='' then candidates[#candidates+1]=name end
+    end
+  end
+  return barrier:active_names(candidates,mq.gettime(),ROSTER_EXPIRY_MS)
+end
+function adapter.barrier_seen(waypoint_id) return barrier:seen_names(waypoint_id) end
+function adapter.barrier_announce(waypoint_id)
+  local cmd='/g PTAR:WAYPOINT:'..tostring(waypoint_id)..':REACHED'
+  log(cmd); mq.cmd(cmd)
+end
+function adapter.barrier_clear() barrier:clear() end
+function adapter.clear_door_confirmed(id) confirmed_doors[id]=nil end
 local function snapshot()
   local p=adapter.position()
   local w=runner and runner.index and route.waypoints[runner.index]
@@ -304,11 +337,18 @@ if filename then load_route() end
 log('AutoRoute session started (build '..version.VERSION..'); log '..diag:path())
 mq.imgui.init('PTAutoRoute',draw)
 local next_snapshot=0
+local next_heartbeat=0
 while running do
   local ok,err=pcall(function()
     mq.doevents()
     local now=mq.gettime()
     if runner then runner:tick(now) end
+    -- DL-010: HERE is sent only while actively trying to complete the route (the rule lives in the runner, so
+    -- it is unit-tested), so an errored/paused/stopped/completed/dead client drops out of every barrier quickly.
+    if runner and runner:heartbeat_active() and now>=next_heartbeat then
+      next_heartbeat=now+HEARTBEAT_INTERVAL_MS
+      mq.cmd('/g PTAR:HERE')
+    end
     if now>=next_snapshot then
       next_snapshot=now+1000; diag:debug('TICK '..snapshot())
     end

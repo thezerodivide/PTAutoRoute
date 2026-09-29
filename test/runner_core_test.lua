@@ -672,3 +672,177 @@ test('DL-001 usability fix: traversal_blocking() clears once the traversal is le
   expect.equal(r.status, 'Completed')
   expect.equal(r:traversal_blocking(), false)
 end)
+
+-- ================================================================ DL-010 (waypoint barrier sync)
+-- Expectations come from DL-010: REACHED sent unconditionally on arrival before the barrier is evaluated;
+-- solo (empty roster) releases immediately; barrier waits until every roster name has been seen; timeout
+-- proceeds anyway with a loud log; barrier sits before tac_before and the waypoint's own action (agreed order);
+-- door confirmation is cleared on release at a door waypoint; barrier-wait is unguarded for Start/Resume/
+-- Use-Nearest and gets ordinary combat pause-and-resume, unlike the TAC/traversal phases.
+local BARRIER_TIMEOUT_MS = 120000
+
+-- A route whose first waypoint sits at the Sim's default starting position (0,0,0), so Start() arrives
+-- immediately (navigate()'s "already within radius" branch) instead of beginning a nav leg.
+local function at_start_route()
+  return route({ wp('wp_001', 0, 0, 0, { radius = 5 }), wp('wp_002', 0, -100, 0, { type = 'finish', radius = 5 }) })
+end
+
+local function arrive_at_first_waypoint(rt, tweak)
+  local s = Sim.new()
+  if tweak then tweak(s) end
+  local r = Core.new(rt or at_start_route(), s.io)
+  r:start(1, 1000)
+  r:tick(1100)   -- Start()'s "already within radius" branch only sets phase='nav'; arrival is detected next tick.
+  return r, s, 1100
+end
+
+test('DL-010: REACHED is announced immediately on arrival, before the barrier is evaluated', function()
+  local r, s, t = arrive_at_first_waypoint(nil, function(sim) sim.barrier_roster = { 'Bob' } end)
+  expect.equal(r.phase, 'barrier_wait')
+  expect.equal(s.count('barrier_announce'), 1)
+  expect.equal(s.last('barrier_announce')[1], 'wp_001')
+end)
+
+test('DL-010: a solo run (empty roster) releases the barrier immediately', function()
+  local r, s, t = arrive_at_first_waypoint(nil)
+  expect.equal(r.phase, 'nav')   -- past the barrier and already navigating on to the next waypoint
+  expect.equal(s.count('nav'), 1)   -- the leg to wp_002 (wp_001 itself was already within radius at Start)
+end)
+
+test('DL-010: with a required teammate not yet seen, the barrier holds and does not dispatch the action', function()
+  local r, s, t = arrive_at_first_waypoint(nil, function(sim) sim.barrier_roster = { 'Bob' } end)
+  r:tick(t + 100)
+  expect.equal(r.phase, 'barrier_wait')
+  expect.equal(r.status, 'Running')
+end)
+
+test('DL-010: once the missing teammate\'s REACHED is seen, the barrier releases on the next tick', function()
+  local r, s, t = arrive_at_first_waypoint(nil, function(sim) sim.barrier_roster = { 'Bob' } end)
+  r:tick(t + 100)
+  expect.equal(r.phase, 'barrier_wait')
+  s.barrier_seen_map['wp_001'] = { Bob = true }
+  r:tick(t + 200)
+  expect.equal(r.phase, 'nav')
+end)
+
+test('DL-010: a barrier release is logged with the roster expected and the names seen', function()
+  local r, s, t = arrive_at_first_waypoint(nil, function(sim) sim.barrier_roster = { 'Bob' } end)
+  s.barrier_seen_map['wp_001'] = { Bob = true }
+  r:tick(t + 100)
+  expect.truthy(has_log(s, 'wp_001'))
+  expect.truthy(has_log(s, 'Bob'))
+end)
+
+test('DL-010: an unmet barrier proceeds after the timeout, with a loud log naming who was missing', function()
+  local r, s, t = arrive_at_first_waypoint(nil, function(sim) sim.barrier_roster = { 'Bob' } end)
+  local t_end = tick_until(r, t, BARRIER_TIMEOUT_MS + 5000, function() return r.phase ~= 'barrier_wait' end)
+  expect.equal(r.phase, 'nav')
+  expect.truthy(t_end - t >= BARRIER_TIMEOUT_MS)
+  expect.truthy(has_log(s, 'Bob'))
+  expect.truthy(has_log(s, 'TIMEOUT') or has_log(s, 'timeout'))
+end)
+
+test('DL-010: barrier release happens before tac_before, preserving the agreed arrival order', function()
+  local rt = route({ wp('wp_001', 0, 0, 0, { radius = 5, tac_before = 'pause' }),
+    wp('wp_002', 0, -400, 0, { type = 'finish', radius = 5 }) })
+  local r, s, t = arrive_at_first_waypoint(rt, function(sim) sim.barrier_roster = { 'Bob' } end)
+  expect.equal(r.phase, 'barrier_wait')
+  expect.equal(s.count('tac_command'), 0)   -- TAC has not been touched while the barrier is still waiting
+  s.barrier_seen_map['wp_001'] = { Bob = true }
+  r:tick(t + 100)
+  expect.equal(r.phase, 'tac_before')   -- barrier released, tac_before now begins
+end)
+
+test('DL-010: at a door waypoint, barrier release clears that door\'s stale confirmation before the door phase begins', function()
+  local rt = route({ wp('wp_001', 0, 0, 0, { type = 'door', door_after = 'continue',
+    door = { id = 77, name = 'd', x = 1, y = 1, z = 1 } }), wp('wp_002', 0, -100, 0, { type = 'finish', radius = 5 }) })
+  local r, s, t = arrive_at_first_waypoint(rt, function(sim)
+    sim.confirmed[77] = true   -- stale from an earlier run
+    sim.barrier_roster = { 'Bob' }   -- delay release so the before/after state is actually observable
+  end)
+  expect.equal(r.phase, 'barrier_wait')
+  expect.equal(s.confirmed[77], true)   -- not cleared yet -- the barrier hasn't released
+  s.barrier_seen_map['wp_001'] = { Bob = true }
+  r:tick(t + 100)
+  expect.equal(r.phase, 'door')
+  expect.equal(s.confirmed[77], nil)   -- cleared on release, before the door phase began
+  expect.truthy(s.count('clear_door_confirmed') >= 1)
+end)
+
+test('DL-010: a door waypoint also clears a stale confirmation when the barrier releases via timeout', function()
+  local rt = route({ wp('wp_001', 0, 0, 0, { type = 'door', door_after = 'continue',
+    door = { id = 88, name = 'd', x = 1, y = 1, z = 1 } }), wp('wp_002', 0, -100, 0, { type = 'finish', radius = 5 }) })
+  local r, s, t = arrive_at_first_waypoint(rt, function(sim)
+    sim.confirmed[88] = true
+    sim.barrier_roster = { 'Bob' }   -- Bob never sends REACHED, so the barrier must time out
+  end)
+  tick_until(r, t, BARRIER_TIMEOUT_MS + 5000, function() return r.phase ~= 'barrier_wait' end)
+  expect.equal(r.phase, 'door')
+  expect.equal(s.confirmed[88], nil)
+end)
+
+test('DL-010: Start, Resume and Use-Nearest are NOT blocked during barrier-wait (unlike TAC/traversal phases)', function()
+  local r, s, t = arrive_at_first_waypoint(nil, function(sim) sim.barrier_roster = { 'Bob' } end)
+  expect.equal(r.phase, 'barrier_wait')
+  expect.equal(r:tac_busy(), false)
+  expect.equal(r:traversal_blocking(), false)
+  r:start(1, t + 10)
+  expect.falsy(r.message:find('blocked', 1, true))
+end)
+
+test('DL-010: combat during barrier-wait pauses and resumes normally, joining the nav/door/ground_exit group', function()
+  local r, s, t = arrive_at_first_waypoint(nil, function(sim) sim.barrier_roster = { 'Bob' } end)
+  s.combat = true
+  r:tick(t + 100)
+  expect.equal(r.status, 'Waiting for combat')
+  expect.equal(r.phase, 'combat')
+  s.combat = false
+  local navs_before = s.count('nav')
+  local announces_before = s.count('barrier_announce')
+  r:tick(t + 200)      -- combat first reads clear; starts the 2000ms clear-wait
+  r:tick(t + 2300)     -- past the 2000ms combat-clear delay
+  expect.equal(r.phase, 'barrier_wait')   -- resumes straight back into the wait, not through navigate()
+  expect.equal(s.count('nav'), navs_before)              -- no re-issued /nav for a stationary wait
+  expect.equal(s.count('barrier_announce'), announces_before)   -- no redundant re-announce
+  s.barrier_seen_map['wp_001'] = { Bob = true }
+  r:tick(t + 2400)
+  expect.equal(r.phase, 'nav')   -- now released and past the barrier
+end)
+
+test('DL-010: barrier state is cleared at Start so a second run does not pass every waypoint instantly', function()
+  local s = Sim.new()
+  local r = Core.new(far_route(), s.io)
+  r:start(1, 1000)
+  expect.equal(s.count('barrier_clear'), 1)
+end)
+
+test('DL-010: heartbeat_active() is true only while actively trying to complete the route', function()
+  local active_route = far_route()
+  local function status_after(setup)
+    local s = Sim.new()
+    local r = Core.new(active_route, s.io)
+    setup(r, s)
+    return r.status, r:heartbeat_active()
+  end
+  local st, active = status_after(function(r, s) r:start(1, 1000) end)
+  expect.equal(st, 'Running'); expect.equal(active, true)
+
+  st, active = status_after(function(r, s) r:start(1, 1000); s.combat = true; r:tick(1100) end)
+  expect.equal(st, 'Waiting for combat'); expect.equal(active, true)
+
+  st, active = status_after(function(r, s) r:start(1, 1000); r:pause() end)
+  expect.equal(st, 'Paused'); expect.equal(active, false)
+
+  st, active = status_after(function(r, s) r:start(1, 1000); r:stop() end)
+  expect.equal(st, 'Ready'); expect.equal(active, false)
+
+  st, active = status_after(function(r, s) end)   -- fresh, never started
+  expect.equal(active, false)
+
+  st, active = status_after(function(r, s)
+    r:start(1, 1000)
+    s.zone = 'elsewhere'   -- forces an Error via the zone check
+    r:tick(1100)
+  end)
+  expect.equal(st, 'Error'); expect.equal(active, false)
+end)

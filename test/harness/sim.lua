@@ -13,6 +13,9 @@ function M.new()
     role = 'primary', confirmed = {},
     -- Scripted TAC (DL-013): its real state, whether it answers /ac status, whether commands take effect.
     tac_actual = 'running', tac_answers = true, tac_applies = true, tac_pending = nil,
+    -- Scripted barrier roster (DL-010): other required teammates (default none, i.e. solo), and per-waypoint
+    -- REACHED names already seen (tests populate this to simulate a teammate's bark arriving).
+    barrier_roster = {}, barrier_seen_map = {},
     calls = {}, logs = {},
   }
   local function rec(name, ...) s.calls[#s.calls + 1] = { name = name, ... } end
@@ -54,6 +57,11 @@ function M.new()
     s.tac_pending = nil
     return v
   end
+  io.barrier_announce = function(waypoint_id) rec('barrier_announce', waypoint_id) end
+  io.barrier_roster = function() return s.barrier_roster end
+  io.barrier_seen = function(waypoint_id) return s.barrier_seen_map[waypoint_id] or {} end
+  io.barrier_clear = function() rec('barrier_clear') end
+  io.clear_door_confirmed = function(id) rec('clear_door_confirmed', id); s.confirmed[id] = nil end
   s.io = setmetatable(io, { __index = function(_, k) error('sim: RunnerCore called an io function the sim does not implement: ' .. tostring(k), 2) end })
 
   function s.count(name)
