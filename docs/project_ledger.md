@@ -14,7 +14,7 @@ Only unbuilt entries are listed; everything else is delivered. Reasoning and ord
 
 - **[DL-010](decision_log.md#dl-010--multi-client-waypoint-barrier-sync-agreed-design-implementation-deliberately-held)** — depends on DL-008, DL-012.
 - **[DL-013](decision_log.md#dl-013--route-authored-tac-pauserun-events-explicit-opt-in-verified-through-ac-status)** — depends on DL-001, DL-006, DL-012.
-- **DL-010 and DL-013 share the runner's arrival and completion seams.** Agreed arrival order: barrier release, then `tac_before`, then the action. Open before implementing: the Start/Resume block and combat rule for the barrier-wait phase.
+- **DL-010 and DL-013 share the runner's arrival and completion seams.** Agreed arrival order: barrier release, then `tac_before`, then the action. **The last item blocking implementation start is now resolved (2026-09-28): the barrier-wait phase is unguarded for Start/Resume (unlike TAC/traversal phases) and combat there gets ordinary pause-and-resume (joining nav/backtrack/door/ground_exit), not ignore-combat.** Ready to build, tests first, whenever the developer says go. Still-open, non-blocking: the primary-drops gap and the chat-ordering assumption (see the entry).
 
 ## Pending Live Verification
 
