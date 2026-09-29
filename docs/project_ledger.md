@@ -21,8 +21,11 @@ Only unbuilt entries are listed; everything else is delivered. Reasoning and ord
 Implemented code changes not yet confirmed by live testing. Check this before assuming a fix in the code is validated — cross-reference each with its decision log entry for full context. Move an item out of this section (and update its decision log status) the moment it's confirmed, whichever bucket it's in.
 
 **Opportunistic only** — can't be deliberately engineered, will be confirmed whenever the right conditions occur naturally during ordinary play:
-- [DL-006](decision_log.md#dl-006--ignore-combat-during-traversal-phases-treat-ground_exit-combat-like-normal-nav) (ignore combat during the 7 traverse/water phases; `ground_exit` gets pause-and-resume) — needs combat to overlap a traversal or a `ground_exit` leg.
 - ~~DL-007~~ — **live-verified 2026-09-28, moved to Resolved behavior below.**
+- [DL-006](decision_log.md#dl-006--ignore-combat-during-traversal-phases-treat-ground_exit-combat-like-normal-nav)'s `ground_exit` combat-pause-and-resume specifically — not yet exercised by any test.
+
+**Partially live-verified, new finding, 2026-09-28:**
+- [DL-006](decision_log.md#dl-006--ignore-combat-during-traversal-phases-treat-ground_exit-combat-like-normal-nav) — the "ignore, don't instant-fail" mechanism is confirmed (a two-character test at Traversal 3 showed combat overlapping `traverse_falling`/`water_cross`/`water_ascend` with no immediate `Error`). But the leg still stalled and failed in `water_ascend`, likely (developer ~99% confidence, not directly observed) because TAC's Manual-mode `Auto-Target Hostiles on XTarget`/`Stick` defaults tried to move the character toward a hostile visible only via the group-shared Auto-Hater XTarget slot — not a mob the character itself was fighting — competing with PTAR's own movement. See the DL-006 entry for full detail. Confirming this mechanism is expected via DL-013's TAC pause events once those are live-tested, not a separate reproduction.
 
 **Ready for a live test now** — built as `0.2.0-test.23`:
 - [DL-013](decision_log.md#dl-013--route-authored-tac-pauserun-events-explicit-opt-in-verified-through-ac-status) (route-authored TAC pause/run events) — local/simulated only. The key unknown is whether PTAR's `mq.event` catches TAC's `[Triune] status:` line live (PTDR does). Also unverified: the Editor combos' layout, `ImGui.BeginDisabled` inside PTAR, and pause latency when TAC is mid-cast.
