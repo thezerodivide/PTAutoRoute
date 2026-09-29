@@ -181,8 +181,8 @@ function adapter.tac_query()
 end
 function adapter.tac_state() return tac:take() end
 -- Waypoint barrier (DL-010): roster is live group membership filtered to those with a recent heartbeat.
--- Assumption, not yet live-verified (Protocol section 4): mq.TLO.Group.Member(i) enumerates OTHER group
--- members, not the local character, matching documented MacroQuest Group TLO semantics.
+-- mq.TLO.Group.Member(i) enumerates OTHER group members, not the local character (live-confirmed 2026-09-28,
+-- DL-010: Me.Name()=Kateri, Group.Members()=2, members Evelynne/Benedict, Kateri's own name never listed).
 function adapter.barrier_roster()
   local candidates={}
   local ok,count=pcall(function() return mq.TLO.Group.Members() end)
