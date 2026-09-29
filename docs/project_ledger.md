@@ -6,7 +6,7 @@ When new evidence resolves an open question, update this ledger before building 
 
 ## Up next
 
-**[DL-010](decision_log.md#dl-010--multi-client-waypoint-barrier-sync-agreed-design-implementation-deliberately-held) (multi-client waypoint barrier sync) is built as `0.2.0-test.25` and waits for a live multi-client test** (local/simulated validation only). Needs a live check of the `mq.TLO.Group.Member` assumption and the chat-ordering assumption. One open, non-code item for the developer: whether to relabel the "Door Role" UI button so it doesn't read as if it also governs waypoint sync.
+**[DL-010](decision_log.md#dl-010--multi-client-waypoint-barrier-sync-agreed-design-implementation-deliberately-held) (multi-client waypoint barrier sync) is built as `0.2.0-test.25` and waits for a live multi-client test** (local/simulated validation only). Needs a live check of the `mq.TLO.Group.Member` assumption and the chat-ordering assumption. The "Door Role" UI label question is resolved: deferred to the separate pre-1.0 UI design pass, left as-is until then.
 
 ## Dependencies (not yet built)
 
@@ -91,7 +91,7 @@ Questions intentionally unresolved — do not decide these unilaterally; surface
 - **Full UI redesign, both Runner and Editor windows (spec §11, §20):** current layout for both windows is not considered satisfactory; a redesign is planned as a future revision and is explicitly out of scope for the current spec document.
 - **TAC integration, if ever added (spec §3, §15):** out of scope for this version; if added later, scope is explicitly limited to starting TAC in Manual mode when the user presses Start — no broader TAC state management. Not a current open question, but noted so a broader TAC integration is never assumed in without a fresh scoping discussion.
 - **[DL-009](decision_log.md#dl-009--levitate-breaks-ground-drop-traversal-fall-detection-known-limitation-deferred)** — Levitate breaks ground-drop fall-detection: confirmed, deliberately deferred as a known limitation (don't levitate before a fall-based traversal).
-- **[DL-010](decision_log.md#dl-010--multi-client-waypoint-barrier-sync-agreed-design-implementation-deliberately-held)** — multi-client waypoint barrier sync (solves the DL-008-discovered drift/combat-desync problem): design fully agreed, **built as `0.2.0-test.25`, 2026-09-28** (see Pending Live Verification above), local/simulated validation only. Scope reduced after an over-engineering review (built the core barrier + active-only heartbeat + proceed-on-timeout; traversal-departure choreography and other extras deferred until live logs justify them). Open: primary-drops gap (nobody left to click doors); whether to relabel "Door Role".
+- **[DL-010](decision_log.md#dl-010--multi-client-waypoint-barrier-sync-agreed-design-implementation-deliberately-held)** — multi-client waypoint barrier sync (solves the DL-008-discovered drift/combat-desync problem): design fully agreed, **built as `0.2.0-test.25`, 2026-09-28** (see Pending Live Verification above), local/simulated validation only. Scope reduced after an over-engineering review (built the core barrier + active-only heartbeat + proceed-on-timeout; traversal-departure choreography and other extras deferred until live logs justify them). Open: primary-drops gap (nobody left to click doors). "Door Role" relabel deferred to the pre-1.0 UI design pass.
 
 ## Out of scope
 
