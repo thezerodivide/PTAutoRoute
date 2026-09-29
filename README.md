@@ -8,7 +8,7 @@ PTAR does not replace TAC, MQ2Nav, or any other tool. It orchestrates them for t
 
 ## Features
 
-- Records a route once, by walking it, then plays it back on demand
+- Records a route once, by walking it and capturing each waypoint as you go, then plays it back on demand
 - Handles ground drops and water crossings where MQ2Nav has no coverage
 - Coordinates door opening across a multi-character group without duplicate clicks
 - Keeps every character on the same route within one waypoint of each other
