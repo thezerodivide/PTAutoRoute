@@ -7,7 +7,7 @@
 | | |
 |---|---|
 | **Document status** | Reviewed and resolved section-by-section — approved as current source of truth |
-| **Implementation status** | Existing, working Lua suite; 5 concrete fixes identified for next version (see Section 21) |
+| **Implementation status** | v1.0. All 5 concrete fixes from Section 21 and the Section 20 UI redesign are implemented and live-verified; see [decision_log.md](decision_log.md) and [project_ledger.md](project_ledger.md) for the full record |
 | **Source of truth** | This document after review/approval |
 
 ---
@@ -38,7 +38,7 @@ PTAR (Project Triune AutoRoute) is a two-part Lua suite for Project Triune / Mac
 
 > **Boundary:** PTAR does not create/generate navmeshes, does not configure MQ2Nav, and — for this version — does not manage TAC. If TAC integration is added in a future version, scope is explicitly limited to starting TAC in Manual mode when the user presses Start; nothing broader.
 
-> **File relocation:** Route and log files are automatically relocated from the MacroQuest config root into a dedicated subfolder on every launch, if legacy files are found there. This relocation-only behavior (never a schema edit) stays active during testing and is scheduled for removal before release.
+> **File relocation — removed before release ([DL-005](decision_log.md#dl-005--remove-routelog-file-relocation-on-launch-behavior-before-release)).** Route and log files were automatically relocated from the MacroQuest config root into a dedicated subfolder on every launch, if legacy files were found there, during earlier testing. This one-time relocation behavior has been removed; `PTARPaths.lua` now only resolves and creates the `PTAR` config/log directories.
 
 ## 4. Confirmed PTAR / MacroQuest Facts
 
@@ -114,7 +114,7 @@ Traversal waypoints exist specifically to cover navmesh gaps — that is their e
 
 > **Resume behavior — resolved, intentional design:** Resume does not continue the exact interrupted step. It searches for the nearest reachable waypoint (within a bounded elevation range and a valid path) and resumes from there, which can mean skipping waypoints in either direction relative to where the pause occurred. This is intentional and differs from DeathRecovery's "resume the exact suspended step" model for a specific reason: DeathRecovery can safely resume the exact step because its environment (The Bazaar) is fully navmeshed, so no user movement during a pause can invalidate the resume target. PTAR cannot make that assumption — its terrain includes navmesh gaps by definition (that's why traversal waypoints exist), so a paused user could move somewhere the interrupted step no longer safely applies to. "Nearest reachable" is the only recovery option that doesn't presuppose the paused state is still valid. Pause/resume design should be justified against each project's specific environment guarantees, not assumed consistent across projects.
 
-> **Start/Resume traversal guard — confirmed gap, fix required next version:** Start and Resume must be blocked whenever the runner's current phase is any traversal phase (traverse_facing, traverse_approach, traverse_falling, water_facing, water_descend, water_cross, water_ascend) — not only mid-fall/mid-swim, since every traversal phase occurs in a navmesh gap by definition. Without this guard, Start/Resume will halt movement and then attempt to navigate to an unreachable point, producing an immediate, avoidable Error. This gap exists because traversal support was added after the original guardrails were designed, and the guardrails were never revisited against the new phase set. Door/door_zone phases are assumed safe from this same concern — a door position is proven reachable by ordinary route playback before door logic ever runs, so no separate guard or verification campaign is needed there. This is an assumption, not yet independently live-verified, but it self-resolves through ordinary use rather than requiring dedicated testing.
+> **Start/Resume traversal guard — fixed and live-verified ([DL-001](decision_log.md#dl-001--block-startresume-during-any-active-traversal-phase)).** Start and Resume are blocked whenever the runner's current phase is any traversal phase (traverse_facing, traverse_approach, traverse_falling, water_facing, water_descend, water_cross, water_ascend) — not only mid-fall/mid-swim, since every traversal phase occurs in a navmesh gap by definition. Without this guard, Start/Resume would halt movement and then attempt to navigate to an unreachable point, producing an immediate, avoidable Error. Door/door_zone phases are assumed safe from this same concern — a door position is proven reachable by ordinary route playback before door logic ever runs, so no separate guard was built there. This assumption is not independently live-verified, but it self-resolves through ordinary use rather than requiring dedicated testing.
 
 ## 9. Retry and Timeout Semantics
 
@@ -174,9 +174,9 @@ Editor window (PTAREditor.lua):
 
 ## 14. Release Identity and Packaging
 
-> **Confirmed fix required:** Version identity must be derived from a single authoritative internal value. Current code hardcodes the version string separately in each window's title (both currently read v0.2.0-test.18 as independent literals), creating drift risk. This is the same fix required for per-line log version stamping (Section 12) — one combined piece of work.
+> **Version identity — fixed and live-verified ([DL-002](decision_log.md#dl-002--mq-console-echo-toggle-per-line-version-stamping-single-authoritative-version-source)).** Version identity is derived from a single authoritative internal value (`PTARVersion.lua`), shared by the Runner's window title, the Editor's window title, and every log line — no more separately hardcoded literals.
 
-> **Folder naming — confirmed fix required:** The config/logs subfolder is currently named PTAutorunner, a legacy name. It should be renamed for consistency with the project's actual name before this structure becomes the template other projects copy.
+> **Folder naming — fixed and live-verified ([DL-004](decision_log.md#dl-004--rename-the-ptautorunner-folder)).** The config/logs subfolder was renamed from the legacy `PTAutorunner` to `PTAR`, consistent with the project's actual name.
 
 - Log/config folder separation itself (macroquest/config/\<name\> vs macroquest/logs/\<name\>) is confirmed correct and matches Development Protocol Section 8. This structure is intentional and will be adopted as the standard across other projects going forward — only the specific folder name needs to change, not the separation pattern.
 
@@ -224,15 +224,18 @@ Statuses (8): Ready, Running, Recovering, Waiting for combat, Paused, Error, Man
 
 ## 20. Provisional and Future Items
 
-Not yet designed; noted so neither is lost, and neither gets decided prematurely:
+Not yet designed; noted so it isn't lost, and isn't decided prematurely:
 
-- Route chaining — a Finish that loads a different route (e.g. Eastern Wastes -> Sleeper's Tomb). Affects Section 5's ending rule and Section 13's persistence-to-root caveat.
-- Full UI redesign for both Runner and Editor windows — explicitly deferred, out of scope for this document.
+- Route chaining — a Finish that loads a different route (e.g. Eastern Wastes -> Sleeper's Tomb). Affects Section 5's ending rule and Section 13's persistence-to-root caveat. Explicitly out of scope for v1.0.
 
-## 21. Concrete Fixes for Next Version
+The full UI redesign for both Runner and Editor windows, formerly listed here as deferred, is done ([DL-015](decision_log.md#dl-015--ui-redesign-review-functional-parity-check-against-pre-redesign-baseline-retrofit-entry)).
 
-- Block Start/Resume during any active traversal phase (Sections 8, 16).
-- MQ-console echo toggle (new) + per-line version stamping + single authoritative version source — one combined piece of work (Sections 12, 14).
-- Persist last-used route and MQ-console-echo preference per server/character (Section 13).
-- Rename the PTAutorunner folder to something consistent with the project name (Section 14).
-- Route/log file relocation-on-launch behavior is intentional for now, but scheduled for removal before release (Section 3).
+## 21. Fixes for v1.0 (complete)
+
+All five items originally listed here are implemented and live-verified as of v1.0:
+
+- Block Start/Resume during any active traversal phase (Sections 8, 16) — [DL-001](decision_log.md#dl-001--block-startresume-during-any-active-traversal-phase).
+- MQ-console echo toggle + per-line version stamping + single authoritative version source (Sections 12, 14) — [DL-002](decision_log.md#dl-002--mq-console-echo-toggle-per-line-version-stamping-single-authoritative-version-source).
+- Persist last-used route and MQ-console-echo preference per server/character (Section 13) — [DL-003](decision_log.md#dl-003--persist-last-used-route-and-mq-console-echo-preference-per-servercharacter).
+- Rename the PTAutorunner folder to PTAR (Section 14) — [DL-004](decision_log.md#dl-004--rename-the-ptautorunner-folder).
+- Remove the route/log file relocation-on-launch behavior before release (Section 3) — [DL-005](decision_log.md#dl-005--remove-routelog-file-relocation-on-launch-behavior-before-release).
