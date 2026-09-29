@@ -341,6 +341,10 @@ function M.new(route,io,opts)
   -- True exactly while PTAR is setting TAC (DL-013), i.e. while Start/Resume are blocked; the UI reads it.
   -- Not derived from `phase`, which keeps its last value after an Error.
   function self:tac_busy() return self.tac~=nil end
+  -- True exactly while a traversal phase blocks Start/Resume/Use-Nearest (DL-001). Live-recomputed from `phase`
+  -- every call, not from `message` -- the message-based block note was found live (2026-09-28) to get silently
+  -- overwritten within seconds by the traversal's own routine progress narration, making it easy to miss.
+  function self:traversal_blocking() return TRAVERSAL_PHASES[self.phase]==true end
   function self:pause()
     halt(); self.index=nil; self.tac=nil; say('Paused','Paused. Resume selects the nearest reachable dry waypoint.')
     note_tac_paused('run paused by the user')

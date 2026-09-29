@@ -631,3 +631,44 @@ test('DL-013: tac_busy is false after Stop or Pause during a TAC phase', functio
   r2:pause()
   expect.equal(r2:tac_busy(), false)
 end)
+
+-- DL-001 usability fix (found live, 2026-09-28): the traversal-block message was a one-shot say() that got
+-- silently overwritten by the traversal's own routine progress narration within a couple of seconds, so the
+-- explanation for why Start/Resume/Use-Nearest did nothing was easy to miss. Fix mirrors DL-013's tac_busy()
+-- pattern: a live, always-recomputed query the UI reads every frame, independent of the transient message.
+test('DL-001 usability fix: traversal_blocking() is true exactly during each of the 7 traversal phases', function()
+  for _, phase in ipairs(TRAVERSAL_PHASES) do
+    local r = to_phase(water_route(), phase)
+    expect.equal(r.phase, phase)
+    expect.equal(r:traversal_blocking(), true)
+  end
+end)
+
+test('DL-001 usability fix: traversal_blocking() is false outside traversal phases', function()
+  local s = Sim.new()
+  local r = Core.new(far_route(), s.io)
+  expect.equal(r:traversal_blocking(), false)   -- fresh
+  r:start(1, 1000)
+  expect.equal(r:traversal_blocking(), false)   -- ordinary nav
+end)
+
+test('DL-001 usability fix: traversal_blocking() stays true across the routine narration that overwrote the old message', function()
+  -- Reproduces the exact live scenario: drive to traverse_falling, let the water drop's own progress messages
+  -- fire (landing, facing underwater, descending) -- the query must not depend on self.message at all.
+  local r, s, t = to_phase(water_route(), 'traverse_falling')
+  expect.equal(r:traversal_blocking(), true)
+  s.feet, s.head, s.p.z = true, true, -60
+  t = tick_until(r, t, 10000, function() return r.phase == 'water_descend' or r.phase == 'water_cross' end)
+  expect.equal(r:traversal_blocking(), true)   -- still blocking, regardless of how many progress messages fired
+end)
+
+test('DL-001 usability fix: traversal_blocking() clears once the traversal is left (Completed)', function()
+  -- Exit placed exactly where the simulated fall lands (0,0,-30) so landing advances straight to the finish,
+  -- with no separate ground_exit nav leg to simulate.
+  local rt = ground_route({ x = 0, y = 0, z = -30, radius = 5 })
+  rt.waypoints[2] = wp('wp_002', 0, 0, -30, { type = 'finish', radius = 5 })
+  local r, s, t = to_phase(rt, 'landed')
+  tick_until(r, t, 10000, function() return r.status == 'Completed' end)
+  expect.equal(r.status, 'Completed')
+  expect.equal(r:traversal_blocking(), false)
+end)

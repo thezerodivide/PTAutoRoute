@@ -261,11 +261,20 @@ local function draw()
         end
         imgui.EndCombo()
       end
-      -- While PTAR is setting TAC (DL-013) Start/Use Nearest/Resume are unavailable for a few seconds; Pause and Stop
-      -- stay enabled. `busy` is read once so BeginDisabled/EndDisabled stay balanced, and clicks are acted on after
-      -- EndDisabled so nothing between the pair can throw.
-      local busy=runner:tac_busy()
-      if busy then imgui.TextColored(1,0.8,0.2,1,'PTAR is setting TAC. Start, Use Nearest Waypoint and Resume are unavailable until it finishes (a few seconds). Pause and Stop still work.') end
+      -- While PTAR is setting TAC (DL-013) or mid-traversal (DL-001), Start/Use Nearest/Resume are unavailable;
+      -- Pause and Stop stay enabled. Both `busy` reasons are read fresh from runner state every frame -- never
+      -- from `runner.message` -- because the traversal block's old message-based note was found live (2026-09-28)
+      -- to get silently overwritten within seconds by the traversal's own routine progress narration, making it
+      -- easy to miss. `busy` is read once per frame so BeginDisabled/EndDisabled stay balanced, and clicks are
+      -- acted on after EndDisabled so nothing between the pair can throw.
+      local tac_busy=runner:tac_busy()
+      local traversal_busy=runner:traversal_blocking()
+      local busy=tac_busy or traversal_busy
+      if tac_busy then
+        imgui.TextColored(1,0.8,0.2,1,'PTAR is setting TAC. Start, Use Nearest Waypoint and Resume are unavailable until it finishes (a few seconds). Pause and Stop still work.')
+      elseif traversal_busy then
+        imgui.TextColored(1,0.8,0.2,1,'PTAR is mid-traversal (phase: '..tostring(runner.phase)..'). Start, Use Nearest Waypoint and Resume are unavailable until this phase completes. Pause and Stop still work.')
+      end
       if busy then imgui.BeginDisabled() end
       local start_clicked=imgui.Button('Start')
       imgui.SameLine(); local nearest_clicked=imgui.Button('Use Nearest Waypoint')
