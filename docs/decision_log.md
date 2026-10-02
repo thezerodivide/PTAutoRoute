@@ -608,10 +608,10 @@ Entries are ordered oldest first. New entries append at the bottom.
 
 ### DL-018 fix — compact view with no runner drew no Full Mode button (found live, `1.1.0-test.23`)
 
-- **Status:** Fixed in `1.1.0-test.24`, local/simulated validation only; **not yet live-checked**. 304 tests still pass; the draw code is parse-checked plus a one-off stubbed run of the real `PTAR.lua` (not kept).
+- **Status:** Fixed in `1.1.0-test.24`. **Developer reported it good live, 2026-10-02** ("it's good", in reply to the three-point check: no-runner status text, greyed buttons, working Full Mode; reported as a whole, not itemized, no log read). Before that, local/simulated validation only. 304 tests still pass; the draw code is parse-checked plus a one-off stubbed run of the real `PTAR.lua` (not kept).
 - **Source label:** the defect was mine (Claude); the fix was **Claude-proposed, developer-approved 2026-10-02** ("Yes"), including the status text.
 - **Defect (found live by the developer, screenshot, 2026-10-02):** starting in compact view in a zone with no routes (so no runner) drew only the Route dropdown. `draw_compact_rows()` returned right after the dropdown when `runner` was nil, so the Status line and the Start / Pause-Resume / Stop / Full Mode row never drew and there was no way back to full view. This contradicted DL-018 requirement 2 (compact has the Full Mode button; selecting it returns to full view). Not caught earlier: the draw code is parse-checked only, and the earlier live no-routes check in compact view had a preserved runner.
 - **Fix:** compact view always draws the Status line and the button row. With no runner the status reads `Status: No route loaded` (developer-approved wording), Start, Pause/Resume and Stop are greyed out and inert, and Full Mode works. With a runner, nothing changes (stubbed run with one route: `Status: Ready`, Start and Stop enabled, Pause/Resume greyed, as before).
 - **Evidence before the fix:** the stubbed run reproduced the screenshot (Route dropdown only; clicking Full Mode impossible). After the fix: all five elements draw, and a Full Mode click logs `View set to full` and switches to the full layout.
-- **Live check needed:** start in compact view in a zone with no routes; the status row and a working Full Mode button appear; click Full Mode.
+- **Live check (done, developer-reported):** start in compact view in a zone with no routes; the status row and a working Full Mode button appear; click Full Mode.
 
