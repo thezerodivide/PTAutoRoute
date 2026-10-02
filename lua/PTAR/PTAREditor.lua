@@ -625,9 +625,22 @@ end
 local diag=logger.new(paths.logs,identity,mq.gettime,version.VERSION,function(m) mq.print(m) end,'PTAR_Editor')
 local function log(text) diag:event(text) end
 local tracker=runner_link.tracker(mq.gettime)
+-- The Editor sends from a mailbox of its own. The module-level actors.send has no dropbox: with a callback it silently
+-- sends nothing and never reports a status (found live 2026-10-02, build test.19); sending through a registered dropbox
+-- carries the reply address and delivers delivery statuses to the callback.
+local editor_box=actors.register('PTAR_Editor_Mailbox',function(message)
+  log('Runner link: ignored an unsolicited message sent to the Editor mailbox')
+end)
+if not editor_box then log('Runner link: could not register the Editor mailbox PTAR_Editor_Mailbox') end
 -- Ask the Runner whether `file` is in use; `on_result` receives the outcome (reply, no_runner or refuse) exactly once.
 local function runner_check(file,on_result)
   local server,character=identity()
+  if not editor_box then
+    local result={kind='refuse',reason='the Editor could not register its messaging mailbox',elapsed=0}
+    log('Runner link: check '..tostring(file)..' result: refused: '..result.reason..'; status code nil; elapsed 0 ms')
+    on_result(result)
+    return false
+  end
   local sent=tracker:send(function(result)
     local detail=result.kind=='reply' and ((result.busy and 'BUSY' or 'OK')..' (Runner status '..tostring(result.status)..')')
       or (result.kind=='no_runner' and 'no Runner found (RoutingFailed)') or ('refused: '..tostring(result.reason))
@@ -637,7 +650,7 @@ local function runner_check(file,on_result)
   end)
   if not sent then log('Runner link: check '..tostring(file)..' not sent: another check is still waiting'); return false end
   log('Runner link: check '..tostring(file)..' sent (server '..tostring(server)..', character '..tostring(character)..')')
-  actors.send(runner_link.header(server,character),{id='check',file=file},function(status,reply)
+  editor_box:send(runner_link.header(server,character),{id='check',file=file},function(status,reply)
     local ok,content=pcall(function() return reply and reply.content end)
     tracker:receive(status,ok and content or nil,actors.ResponseStatus)
   end)
