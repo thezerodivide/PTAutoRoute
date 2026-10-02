@@ -369,7 +369,7 @@ local function draw()
       if selected then imgui.PopStyleColor() end
       if clicked and not selected then mode=value; log('Mode set to '..value); save_settings() end
     end
-    mode_button('Solo','solo'); imgui.SameLine(); mode_button('Group','group')
+    mode_button('Solo','solo'); imgui.SameLine(); mode_button('Group (Beta)','group')
     if mode_busy then imgui.EndDisabled() end
     if mode_busy then imgui.TextColored(1,0.8,0.2,1,'Pause or Stop to switch modes.') end
     imgui.AlignTextToFramePadding(); imgui.Text('Route'); imgui.SameLine()
