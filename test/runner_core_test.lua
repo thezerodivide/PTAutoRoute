@@ -987,3 +987,92 @@ test('DL-016 requirement 6: the extended deadline still eventually times out, at
   expect.equal(r.phase, 'nav')
   expect.truthy(has_log(s, 'TIMEOUT'))
 end)
+
+-- DL-018 requirement 6: the compact view's single Pause/Resume button. pause_resume_state() says what it should
+-- be ('pause', 'resume' or 'disabled') from the runner's status alone; the UI only draws it. Every status is
+-- reached through the public API, never by assigning r.status.
+local function recovering_runner()
+  local rt = route({ wp('wp_001', 0, -100, 0, { radius = 5 }),
+    wp('wp_002', 0, -200, 0, { radius = 5 }), wp('wp_003', 0, -300, 0, { type = 'finish', radius = 5 }) })
+  local s = Sim.new()
+  local r = Core.new(rt, s.io)
+  r:start(1, 1000)
+  s.p = { x = 0, y = -100, z = 0 }; r:tick(1100)
+  s.p = { x = 0, y = -200, z = 0 }
+  local t = tick_until(r, 1100, 10000, function() return r.phase == 'nav' and r.index == 3 end)
+  s.nav_active = false
+  tick_until(r, t, 60000, function() return r.status == 'Recovering' end)
+  return r
+end
+
+test('DL-018 req 6: Pause/Resume reads "pause" while Running', function()
+  local s = Sim.new()
+  local r = Core.new(far_route(), s.io)
+  r:start(1, 1000)
+  expect.equal(r.status, 'Running')
+  expect.equal(r:pause_resume_state(), 'pause')
+end)
+
+test('DL-018 req 6: Pause/Resume reads "pause" while Recovering', function()
+  local r = recovering_runner()
+  expect.equal(r.status, 'Recovering')
+  expect.equal(r:pause_resume_state(), 'pause')
+end)
+
+test('DL-018 req 6: Pause/Resume reads "pause" while Waiting for combat', function()
+  local r, s, t = to_phase(ground_route(), 'ground_exit')
+  s.combat = true
+  r:tick(t + 100)
+  expect.equal(r.status, 'Waiting for combat')
+  expect.equal(r:pause_resume_state(), 'pause')
+end)
+
+test('DL-018 req 6: Pause/Resume reads "pause" while Waiting for med break', function()
+  local s = Sim.new()
+  local r = Core.new(far_route(), s.io)
+  r:start(1, 1000)
+  s.medbreak = true
+  r:tick(1100)
+  expect.equal(r.status, 'Waiting for med break')
+  expect.equal(r:pause_resume_state(), 'pause')
+end)
+
+test('DL-018 req 6: Pause/Resume reads "resume" while Paused', function()
+  local s = Sim.new()
+  local r = Core.new(far_route(), s.io)
+  r:start(1, 1000)
+  r:pause()
+  expect.equal(r.status, 'Paused')
+  expect.equal(r:pause_resume_state(), 'resume')
+end)
+
+test('DL-018 req 6: Pause/Resume is disabled in Ready (fresh runner, and after Stop)', function()
+  local s = Sim.new()
+  local r = Core.new(far_route(), s.io)
+  expect.equal(r.status, 'Ready')
+  expect.equal(r:pause_resume_state(), 'disabled')
+  r:start(1, 1000)
+  r:stop()
+  expect.equal(r.status, 'Ready')
+  expect.equal(r:pause_resume_state(), 'disabled')
+end)
+
+test('DL-018 req 6: Pause/Resume is disabled in Completed', function()
+  local r, s, t = at_door('primary', 'finish_open')
+  s.door_state = true
+  r:tick(t + 400)
+  expect.equal(r.status, 'Completed')
+  expect.equal(r:pause_resume_state(), 'disabled')
+end)
+
+test('DL-018 req 6: Pause/Resume is disabled in Error', function()
+  local r = approach_after_walking(150)
+  expect.equal(r.status, 'Error')
+  expect.equal(r:pause_resume_state(), 'disabled')
+end)
+
+test('DL-018 req 6: Pause/Resume is disabled in Manual handoff', function()
+  local r = to_phase(ground_route({ x = 0, y = 0, z = -30, radius = 5 }, { manual_handoff = true }), 'landed')
+  expect.equal(r.status, 'Manual handoff')
+  expect.equal(r:pause_resume_state(), 'disabled')
+end)

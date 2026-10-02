@@ -20,6 +20,12 @@ local door_role='primary'
 -- one-time notice modal's job is proof of notice, not enforcement (nothing forces the user to read it).
 local mode='solo'
 local seen_mode_notice=false
+-- DL-018: 'full' (default) or 'compact'. full_size remembers the user's full-view window size when they go compact
+-- so Full restores it; apply_size forces the window size for exactly one frame after a view switch.
+local view='full'
+local full_size={w=560,h=390}
+local apply_size=nil
+local COMPACT_SIZE={w=520,h=120}
 local confirmed_doors={}
 local choices={}
 local runner,route
@@ -39,7 +45,7 @@ local function log(message)
 end
 local function save_settings()
   settings_mod.save(paths.config,identity,{last_route=filename,echo_enabled=diag.echo,door_role=door_role,
-    mode=mode,seen_mode_notice=seen_mode_notice})
+    mode=mode,seen_mode_notice=seen_mode_notice,view=view})
 end
 mq.event('ptar_door_open',"#1# tells the group, '#2#'",function(line,sender,message)
   local id=tonumber(message:match('^PTAR:DOOR:(%d+):OPEN$'))
@@ -326,8 +332,79 @@ local function load_route()
   diag:debug('Route load snapshot: '..snapshot())
   save_settings()
 end
+-- DL-018: right-align the next item. GetWindowWidth is used by other Project Triune scripts; if it is ever
+-- unavailable the item simply follows the previous one on the same line.
+local function right_align(offset)
+  local ok,width=pcall(function() return imgui.GetWindowWidth() end)
+  if ok and type(width)=='number' then imgui.SameLine(width-offset) else imgui.SameLine() end
+end
+-- Switching views changes presentation only. Going compact remembers the full-view window size (read inside the
+-- window, so call from draw()); going full restores it. The size is applied to exactly one frame.
+local function set_view(target)
+  if target==view then return end
+  if target=='compact' then
+    local ok,w,h=pcall(function() return imgui.GetWindowSize() end)
+    if ok and type(w)=='number' and type(h)=='number' and w>0 and h>0 then full_size={w=w,h=h}
+    else log('Could not read the full-view window size; Full will restore '..full_size.w..'x'..full_size.h) end
+  end
+  view=target; apply_size=target
+  log('View set to '..target)
+  save_settings()
+end
+-- Route selector, shared by full and compact view so the guard and the load behave identically.
+local function route_selector()
+  imgui.AlignTextToFramePadding(); imgui.Text('Route'); imgui.SameLine()
+  local display=filename or '(no routes found)'
+  for _,entry in ipairs(choices) do if entry.file==filename then display=entry.label end end
+  if imgui.BeginCombo('##runner_route',display) then
+    for _,entry in ipairs(choices) do
+      if imgui.Selectable(entry.label..'##'..entry.file,filename==entry.file) then
+        if runner and (runner.status=='Running' or runner.status=='Recovering' or runner.status=='Waiting for combat') then
+          notice='Pause or Stop before changing routes.'
+        else filename=entry.file; load_route() end
+      end
+    end
+    imgui.EndCombo()
+  end
+end
+-- Start with the method and waypoint chosen in full view; compact view calls this too.
+local function do_start()
+  if start_mode=='selected' then runner:start(runner.selected,mq.gettime())
+  elseif start_mode=='beginning' then runner:start(1,mq.gettime())
+  else runner:start_nearest(mq.gettime()) end
+end
+-- DL-018: compact view -- Route, Status, then Start / Pause-Resume / Stop / Full. Deliberately quiet: no messages,
+-- notices or block explanations (full view has them).
+local function draw_compact()
+  route_selector()
+  if not runner then return end
+  imgui.Text('Status: '..runner.status)
+  local busy=runner:tac_busy() or runner:traversal_blocking()
+  if busy then imgui.BeginDisabled() end
+  local start_clicked=imgui.Button('Start')
+  if busy then imgui.EndDisabled() end
+  imgui.SameLine()
+  local pr=runner:pause_resume_state()
+  local pr_labels={pause='Pause',resume='Resume',disabled='Pause/Resume'}
+  local pr_off=(pr=='disabled') or (pr=='resume' and busy)
+  if pr_off then imgui.BeginDisabled() end
+  local pr_clicked=imgui.Button(pr_labels[pr]..'##pr')
+  if pr_off then imgui.EndDisabled() end
+  imgui.SameLine(); local stop_clicked=imgui.Button('Stop')
+  right_align(60); local full_clicked=imgui.Button('Full')
+  if start_clicked then do_start() end
+  if pr_clicked then
+    if pr=='pause' then runner:pause() elseif pr=='resume' then runner:resume(mq.gettime()) end
+  end
+  if stop_clicked then runner:stop() end
+  if full_clicked then set_view('full') end
+end
 local function draw()
-  imgui.SetNextWindowSize(ImVec2(560,390),ImGuiCond.FirstUseEver)
+  if apply_size=='compact' then imgui.SetNextWindowSize(ImVec2(COMPACT_SIZE.w,COMPACT_SIZE.h),ImGuiCond.Always)
+  elseif apply_size=='full' then imgui.SetNextWindowSize(ImVec2(full_size.w,full_size.h),ImGuiCond.Always)
+  elseif view=='compact' then imgui.SetNextWindowSize(ImVec2(COMPACT_SIZE.w,COMPACT_SIZE.h),ImGuiCond.FirstUseEver)
+  else imgui.SetNextWindowSize(ImVec2(full_size.w,full_size.h),ImGuiCond.FirstUseEver) end
+  apply_size=nil
   imgui.SetNextWindowPos(ImVec2(55,55),ImGuiCond.FirstUseEver)
   local open,visible=imgui.Begin('Project Triune AutoRoute v'..version.VERSION..'###Project Triune AutoRoute',true)
   if open==false then running=false end
@@ -358,6 +435,7 @@ local function draw()
       end
       imgui.EndPopup()
     end
+    if view=='compact' then draw_compact() else
     imgui.AlignTextToFramePadding(); imgui.Text('Mode'); imgui.SameLine()
     local mode_busy=runner and (runner.status=='Running' or runner.status=='Recovering' or
       runner.status=='Waiting for combat' or runner.status=='Waiting for med break')
@@ -371,20 +449,9 @@ local function draw()
     end
     mode_button('Solo','solo'); imgui.SameLine(); mode_button('Group (Beta)','group')
     if mode_busy then imgui.EndDisabled() end
+    right_align(88); if imgui.Button('Compact') then set_view('compact') end
     if mode_busy then imgui.TextColored(1,0.8,0.2,1,'Pause or Stop to switch modes.') end
-    imgui.AlignTextToFramePadding(); imgui.Text('Route'); imgui.SameLine()
-    local display=filename or '(no routes found)'
-    for _,entry in ipairs(choices) do if entry.file==filename then display=entry.label end end
-    if imgui.BeginCombo('##runner_route',display) then
-      for _,entry in ipairs(choices) do
-        if imgui.Selectable(entry.label..'##'..entry.file,filename==entry.file) then
-          if runner and (runner.status=='Running' or runner.status=='Recovering' or runner.status=='Waiting for combat') then
-            notice='Pause or Stop before changing routes.'
-          else filename=entry.file; load_route() end
-        end
-      end
-      imgui.EndCombo()
-    end
+    route_selector()
     if imgui.Button('Refresh Routes') then
       if runner and (runner.status=='Running' or runner.status=='Recovering' or runner.status=='Waiting for combat') then notice='Pause or Stop before refreshing routes.'
       else refresh_routes(); load_route() end
@@ -433,11 +500,7 @@ local function draw()
         end
         imgui.EndCombo()
       end
-      if start_clicked then
-        if start_mode=='selected' then runner:start(runner.selected,mq.gettime())
-        elseif start_mode=='beginning' then runner:start(1,mq.gettime())
-        else runner:start_nearest(mq.gettime()) end
-      end
+      if start_clicked then do_start() end
       if imgui.Button('Pause') then runner:pause() end
       imgui.SameLine()
       if busy then imgui.BeginDisabled() end
@@ -474,6 +537,7 @@ local function draw()
       diag:set_echo(not diag.echo,snapshot)
       save_settings()
     end
+    end
   end
   imgui.End()
 end
@@ -482,13 +546,14 @@ local settings=settings_mod.read(paths.config,identity)
 if settings.last_route then filename=settings.last_route end
 if settings.door_role then door_role=settings.door_role end
 if settings.mode then mode=settings.mode end
+if settings.view then view=settings.view end
 if settings.seen_mode_notice then seen_mode_notice=settings.seen_mode_notice end
 local echo_default=settings.echo_enabled
 if echo_default==nil then echo_default=version.is_test() end
 diag:set_echo(echo_default,snapshot)
 refresh_routes()
 if filename then load_route() end
-log('AutoRoute session started (build '..version.VERSION..'); log '..diag:path())
+log('AutoRoute session started (build '..version.VERSION..', view '..view..'); log '..diag:path())
 mq.imgui.init('PTAutoRoute',draw)
 local next_snapshot=0
 local next_heartbeat=0

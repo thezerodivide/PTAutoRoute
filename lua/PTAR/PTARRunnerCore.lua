@@ -401,6 +401,15 @@ function M.new(route,io,opts)
     halt(); self.index=nil; self.tac=nil; say('Paused','Paused. Resume selects the nearest reachable dry waypoint.')
     note_tac_paused('run paused by the user')
   end
+  -- DL-018 req 6: what the compact view's single Pause/Resume button is. Derived from status alone so it is
+  -- unit-tested here; the UI only draws it. 'pause' while actively working a route, 'resume' while Paused,
+  -- 'disabled' in every other status (Ready, Completed, Error, Manual handoff).
+  function self:pause_resume_state()
+    if self.status=='Paused' then return 'resume' end
+    if self.status=='Running' or self.status=='Recovering' or self.status=='Waiting for combat'
+      or self.status=='Waiting for med break' then return 'pause' end
+    return 'disabled'
+  end
   function self:stop()
     halt(); self.index=nil; self.selected=1; self.last_good=nil; self.phase=nil; self.tac=nil
     say('Ready','Stopped. Start defaults to the first waypoint.')
