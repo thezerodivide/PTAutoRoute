@@ -149,3 +149,22 @@ test('DL-021: an active run defers the update', function()
     expect.equal(Z.decide('a', status, 'a'), 'defer', status)
   end
 end)
+
+-- ---------------------------------------------------------------- the zone-update log line (logging standard)
+-- Developer-approved wording (2026-10-02): `Zone update: <action>; zone <zone>; runner <status or none>;
+-- loaded <file or none>; displayed <file or none>`.
+test('DL-021 logging: the zone-update line has the approved wording and every field', function()
+  expect.equal(Z.update_line('pending', 'sleeper', 'Completed', 'PTAR_EW.lua', 'PTAR_Kera.lua'),
+    'Zone update: pending; zone sleeper; runner Completed; loaded PTAR_EW.lua; displayed PTAR_Kera.lua')
+end)
+
+test('DL-021 logging: a missing runner, loaded file or displayed file is written as "none"', function()
+  expect.equal(Z.update_line('clear_runner', 'potimeb', nil, nil, nil),
+    'Zone update: clear_runner; zone potimeb; runner none; loaded none; displayed none')
+end)
+
+test('DL-021 logging: every action name is passed through unchanged', function()
+  for _, action in ipairs({ 'load_default', 'clear_runner', 'pending', 'restore', 'defer' }) do
+    expect.truthy(Z.update_line(action, 'z', 'Ready', 'a', 'b'):find('Zone update: ' .. action .. ';', 1, true))
+  end
+end)

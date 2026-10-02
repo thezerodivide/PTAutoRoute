@@ -62,8 +62,9 @@ local function log(message)
   diag:event(message)
 end
 local function save_settings()
-  settings_mod.save(paths.config,identity,{echo_enabled=diag.echo,door_role=door_role,
+  local ok,err=settings_mod.save(paths.config,identity,{echo_enabled=diag.echo,door_role=door_role,
     mode=mode,seen_mode_notice=seen_mode_notice,view=view,zone_routes=zone_routes})
+  if not ok then log('Settings save failed: '..tostring(err)) end
 end
 mq.event('ptar_door_open',"#1# tells the group, '#2#'",function(line,sender,message)
   local id=tonumber(message:match('^PTAR:DOOR:(%d+):OPEN$'))
@@ -343,16 +344,24 @@ local function refresh_routes()
   log('Route scan: '..#choices..' candidates')
 end
 local function load_route()
-  if runner and (runner.status=='Running' or runner.status=='Recovering' or runner.status=='Waiting for combat') then notice='Pause or Stop before loading another route.'; return end
-  if not filename or not files.accept(filename) then notice='Select a route from the list.'; return end
+  -- Every refusal sets the notice and is logged with its cause (logging standard: failures and their causes).
+  local function failed(shown,reason)
+    notice=shown
+    log('Route load failed: '..tostring(filename or 'none')..': '..reason)
+  end
+  if runner and (runner.status=='Running' or runner.status=='Recovering' or runner.status=='Waiting for combat') then
+    failed('Pause or Stop before loading another route.','a run is active ('..runner.status..')'); return
+  end
+  if not filename then failed('Select a route from the list.','no route selected'); return end
+  if not files.accept(filename) then failed('Select a route from the list.','file name not accepted'); return end
   runner=nil; route=nil; loaded_file=nil
   local path=paths.config..'/'..filename
   local loaded,err=data.read(path)
-  if not loaded then notice='Load failed: '..tostring(err); return end
+  if not loaded then failed('Load failed: '..tostring(err),'could not read the file: '..tostring(err)); return end
   local errors=data.validate(loaded)
-  if #errors>0 then notice='Route invalid: '..table.concat(errors,'; '); return end
+  if #errors>0 then failed('Route invalid: '..table.concat(errors,'; '),'route invalid: '..table.concat(errors,'; ')); return end
   if not files.has_endpoint(loaded) then
-    notice=zone_select.INCOMPLETE_REASON; return
+    failed(zone_select.INCOMPLETE_REASON,zone_select.INCOMPLETE_REASON); return
   end
   route=loaded; runner=machine.new(route,adapter); loaded_file=filename
   notice='Loaded '..route.route_name..' ('..#route.waypoints..' waypoints).\nLog: '..diag:path()
@@ -367,21 +376,28 @@ end
 -- character is back in the loaded route's own stored zone, the loaded route again (restore).
 local function apply_zone()
   if not current_zone then return end
-  local action=zone_select.decide(current_zone,runner and runner.status or nil,route and route.zone_short_name or nil)
-  if action=='defer' then zone_deferred=true; return end
+  local status=runner and runner.status or nil
+  local action=zone_select.decide(current_zone,status,route and route.zone_short_name or nil)
+  -- One log line per decision (logging standard): the action and the state that drove it.
+  local function decided(name,displayed)
+    log(zone_select.update_line(name,current_zone,status,loaded_file,displayed))
+  end
+  if action=='defer' then decided('defer',filename); zone_deferred=true; return end
   zone_deferred=false
-  if action=='restore' then filename=loaded_file; return end
+  if action=='restore' then decided('restore',loaded_file); filename=loaded_file; return end
   local default=zone_select.default_file(choices,current_zone,zone_routes[current_zone])
-  filename=default
-  if action=='pending' then return end
-  if default then load_route()
-  else runner=nil; route=nil; loaded_file=nil end
+  if action=='pending' then decided('pending',default); filename=default; return end
+  if default then decided('load_default',default); filename=default; load_route()
+  else decided('clear_runner',nil); filename=nil; runner=nil; route=nil; loaded_file=nil end
 end
 -- True when the displayed route is not the one the runner holds (it loads on select or Start).
 local function route_pending() return runner~=nil and loaded_file~=filename end
 -- Load the displayed route if it is not the loaded one; true when the runner now holds the displayed route.
 local function ensure_loaded()
-  if filename and filename~=loaded_file then load_route() end
+  if filename and filename~=loaded_file then
+    log('Start: loading displayed route '..filename..' first (runner holds '..(loaded_file or 'none')..')')
+    load_route()
+  end
   return runner~=nil and filename~=nil and loaded_file==filename
 end
 -- DL-018: right-align the next item. GetWindowWidth is used by other Project Triune scripts; if it is ever
@@ -448,6 +464,7 @@ local function route_selector(compact)
         if pressed then
           if runner and (runner.status=='Running' or runner.status=='Recovering' or runner.status=='Waiting for combat') then
             notice='Pause or Stop before changing routes.'
+            log('Route selection refused: '..entry.file..': a run is active ('..runner.status..')')
           else filename=entry.file; load_route() end
         end
       else
@@ -712,7 +729,7 @@ while running do
     if zone_event=='unavailable' then
       if current_zone~=nil and not zone_unavailable then zone_unavailable=true; log('Zone reading unavailable') end
     else
-      zone_unavailable=false
+      if zone_unavailable then zone_unavailable=false; log('Zone reading restored: '..zone) end
       if zone_event=='changed' then
         log('Zone changed: '..(current_zone or '(none)')..' -> '..zone)
         current_zone=zone

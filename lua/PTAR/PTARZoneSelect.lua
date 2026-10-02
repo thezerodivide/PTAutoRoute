@@ -69,4 +69,10 @@ function M.decide(zone,status,loaded_zone)
   return 'pending'
 end
 
+-- The log line for one zone-update decision (logging standard, Protocol 8): what was decided and the state that drove it.
+function M.update_line(action,zone,status,loaded,displayed)
+  return 'Zone update: '..action..'; zone '..tostring(zone)..'; runner '..(status or 'none')..'; loaded '..(loaded or 'none')
+    ..'; displayed '..(displayed or 'none')
+end
+
 return M
