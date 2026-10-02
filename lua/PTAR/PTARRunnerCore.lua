@@ -296,8 +296,18 @@ function M.new(route,io,opts)
   -- waypoint. REACHED is sent unconditionally on arrival, before the barrier is evaluated at all, so a client
   -- that later miscounts or proceeds early never withholds its own bark -- the stall scenario this rule
   -- prevents is only possible if the bark were sent on release instead.
+  -- A group med break (mine or anyone's, DL-016) gates this specifically -- not ordinary nav/door/ground_exit,
+  -- since a groupmate medding should not freeze someone else's travel toward the waypoint, only the rendezvous
+  -- itself. This covers both "not yet started" (checked here, before the roster/seen logic ever runs) and
+  -- "already running" (the same check fires again on every subsequent tick while still in barrier_wait).
   local function check_barrier(now)
     local w=waypoints[self.index]
+    if io.medbreak_group_active() then
+      self.medbreak_return='barrier_wait'; self.medbreak_paused_at=now
+      self.phase='medbreak'
+      say('Waiting for med break','Waiting for a group med break to end before continuing at '..w.label..' ('..w.id..')')
+      return
+    end
     local roster=io.barrier_roster()
     local seen=io.barrier_seen(w.id)
     local missing={}
@@ -386,7 +396,7 @@ function M.new(route,io,opts)
   -- Whether a PTAR:HERE heartbeat should be sent right now (DL-010): only while actively trying to complete the
   -- route, so an errored, paused, stopped, dead or completed client drops out of everyone's roster quickly
   -- instead of holding a barrier open. The rule lives here, not in the adapter, so it is unit-tested.
-  function self:heartbeat_active() return self.status=='Running' or self.status=='Recovering' or self.status=='Waiting for combat' end
+  function self:heartbeat_active() return self.status=='Running' or self.status=='Recovering' or self.status=='Waiting for combat' or self.status=='Waiting for med break' end
   function self:pause()
     halt(); self.index=nil; self.tac=nil; say('Paused','Paused. Resume selects the nearest reachable dry waypoint.')
     note_tac_paused('run paused by the user')
@@ -397,7 +407,7 @@ function M.new(route,io,opts)
     note_tac_paused('run stopped by the user')
   end
   function self:tick(now)
-    if self.status~='Running' and self.status~='Recovering' and self.status~='Waiting for combat' then return end
+    if self.status~='Running' and self.status~='Recovering' and self.status~='Waiting for combat' and self.status~='Waiting for med break' then return end
     if self.phase=='door_zone' then
       local zone=io.zone()
       if zone and zone~=route.zone_short_name and io.position() then
@@ -454,6 +464,46 @@ function M.new(route,io,opts)
         (self.phase=='barrier_wait' and 'barrier_wait' or 'nav'))
       halt(); self.phase='combat'; self.combat_return=returning; self.combat_clear_at=nil
       say('Waiting for combat','Combat interrupted '..w.label..'; keeping the current waypoint and retries.')
+      return
+    end
+    -- My own med break (DL-016) joins the same interrupt group as combat, checked after combat so the two never
+    -- race for precedence (TAC itself cancels a med break on an actual attack, so they are not expected to
+    -- overlap for the same character in practice, but combat wins if they somehow do).
+    if io.medbreak() and (self.phase=='nav' or self.phase=='backtrack' or self.phase=='door' or self.phase=='ground_exit' or self.phase=='barrier_wait') then
+      local returning=self.phase=='backtrack' and 'backtrack' or (self.phase=='ground_exit' and 'ground_exit' or
+        (self.phase=='barrier_wait' and 'barrier_wait' or 'nav'))
+      halt(); self.phase='medbreak'; self.medbreak_return=returning; self.medbreak_paused_at=now
+      say('Waiting for med break','Med break interrupted '..w.label..'; keeping the current waypoint and retries.')
+      return
+    end
+    if self.phase=='medbreak' then
+      local returning=self.medbreak_return
+      if returning=='barrier_wait' then
+        if io.medbreak_group_active() then return end
+        local paused=now-self.medbreak_paused_at
+        self.medbreak_paused_at=nil; self.medbreak_return=nil
+        self.barrier_started=self.barrier_started+paused
+        io.log(string.format('Group med break clear; resuming barrier wait at %s (deadline extended by %d ms)',w.label,paused))
+        self.phase='barrier_wait'; check_barrier(now)
+        return
+      end
+      if io.medbreak() then return end
+      self.medbreak_paused_at=nil; self.medbreak_return=nil
+      io.log('Med break clear; resuming '..returning..' toward '..w.label)
+      if returning=='backtrack' then
+        local back=waypoints[self.last_good]
+        if dist(p,back)<=radius(back) then finish_backtrack(now)
+        elseif not io.mesh() or not io.path(back) then fail('Could not return to previous known good waypoint')
+        else io.nav(back); self.phase='backtrack'; self.started=now
+          say('Recovering','Returning to # '..self.last_good..' '..back.label..' after med break') end
+      elseif returning=='ground_exit' then
+        local exit=w.exit
+        if dist(p,exit)<=exit.radius then
+          io.nav_stop(); self.attempt=0; self.backtracked=false; advance(now)
+        elseif not io.mesh() or not io.path(exit) then fail('No navigable path from ground landing to '..w.label..' exit')
+        else io.nav(exit); self.phase='ground_exit'; self.started=now; self.progress_at=now; self.best=dist(p,exit)
+          say('Running','Navigating to dry exit of '..w.label..' after med break') end
+      else navigate(now) end
       return
     end
     if self.phase=='barrier_wait' then check_barrier(now); return end

@@ -16,6 +16,10 @@ local running=true
 local filename=nil
 local start_mode='selected'
 local door_role='primary'
+-- DL-017: Solo is the default for every installation, new or existing -- Group mode is currently beta. The
+-- one-time notice modal's job is proof of notice, not enforcement (nothing forces the user to read it).
+local mode='solo'
+local seen_mode_notice=false
 local confirmed_doors={}
 local choices={}
 local runner,route
@@ -34,7 +38,8 @@ local function log(message)
   diag:event(message)
 end
 local function save_settings()
-  settings_mod.save(paths.config,identity,{last_route=filename,echo_enabled=diag.echo,door_role=door_role})
+  settings_mod.save(paths.config,identity,{last_route=filename,echo_enabled=diag.echo,door_role=door_role,
+    mode=mode,seen_mode_notice=seen_mode_notice})
 end
 mq.event('ptar_door_open',"#1# tells the group, '#2#'",function(line,sender,message)
   local id=tonumber(message:match('^PTAR:DOOR:(%d+):OPEN$'))
@@ -58,6 +63,36 @@ mq.event('ptar_here',"#1# tells the group, 'PTAR:HERE'",function(line,sender)
 end)
 mq.event('ptar_waypoint_reached',"#1# tells the group, 'PTAR:WAYPOINT:#2#:REACHED'",function(line,sender,waypoint_id)
   barrier:record_reached(waypoint_id,sender)
+end)
+-- TAC med breaks (DL-016). My own break is detected locally from TAC's own console lines (the same mq.event
+-- pattern already used for its /ac status line); whenever my own flag toggles, I announce it to the group so
+-- everyone's barrier logic can defer on it, the same shape as the existing HERE/WAYPOINT:REACHED barks.
+-- MEDBREAK_GRACE_MS: TAC prints the start line, then issues /sit a moment later -- the Sitting/Ducking fallback
+-- (for the one silent-clear path that stands the character up, DL-016) is not trusted until this grace period
+-- has passed, so it cannot fire on the brief window before /sit actually takes effect. First guess (Protocol s15).
+local MEDBREAK_GRACE_MS=3000
+local my_medbreak=false
+local medbreak_started_at=nil
+local function set_my_medbreak(active,now)
+  if active==my_medbreak then return end
+  my_medbreak=active; medbreak_started_at=active and now or nil
+  local cmd='/g PTAR:MEDBREAK:'..(active and 'START' or 'END')
+  log(cmd); mq.cmd(cmd)
+end
+mq.event('ptar_medbreak_start','#*#[Triune] Med Break -- #*#',function(line)
+  set_my_medbreak(true,mq.gettime())
+end)
+mq.event('ptar_medbreak_over','#*#[Triune] Med Break over -- #*#',function(line)
+  set_my_medbreak(false,mq.gettime())
+end)
+mq.event('ptar_medbreak_cancelled','#*#[Triune] Med Break cancelled -- #*#',function(line)
+  set_my_medbreak(false,mq.gettime())
+end)
+mq.event('ptar_medbreak_group_start',"#1# tells the group, 'PTAR:MEDBREAK:START'",function(line,sender)
+  barrier:mark_medbreak(sender)
+end)
+mq.event('ptar_medbreak_group_end',"#1# tells the group, 'PTAR:MEDBREAK:END'",function(line,sender)
+  barrier:clear_medbreak(sender)
 end)
 local function coords(w) return string.format('locyxz %.3f %.3f %.3f',w.y,w.x,w.z) end
 local function read_bool(fn)
@@ -163,10 +198,13 @@ function adapter.door(w,click_even_if_open)
   if open and not click_even_if_open then return 'open' end
   log('DOOR CLICK '..w.id..' '..w.label); mq.cmd('/click left door'); return 'clicked'
 end
-function adapter.door_role() return door_role end
+-- DL-017: overridden at the read site, never mutated -- the stored Group-mode value is untouched by switching
+-- modes, which is what makes "switching preserves/restores Group settings" free (nothing was ever overwritten).
+function adapter.door_role() return mode=='solo' and 'primary' or door_role end
 function adapter.door_confirmed(id) return confirmed_doors[id]==true end
 function adapter.announce_door_open(id)
   local cmd='/g PTAR:DOOR:'..tostring(id)..':OPEN'
+  if mode=='solo' then log(cmd..' (Solo mode: not sent)'); return end
   log(cmd); mq.cmd(cmd)
 end
 -- TAC control (DL-013): PTAR only pauses or runs TAC where a route's waypoints say so. The acknowledgement line
@@ -184,7 +222,12 @@ function adapter.tac_state() return tac:take() end
 -- Waypoint barrier (DL-010): roster is live group membership filtered to those with a recent heartbeat.
 -- mq.TLO.Group.Member(i) enumerates OTHER group members, not the local character (live-confirmed 2026-09-28,
 -- DL-010: Me.Name()=Kateri, Group.Members()=2, members Evelynne/Benedict, Kateri's own name never listed).
+-- DL-017: an empty roster in Solo mode reuses check_barrier()'s already-tested "nobody to wait for, release
+-- immediately" path (the same path a true solo run already took before Solo mode existed as a concept) --
+-- no change needed in PTARRunnerCore.lua at all. medbreak_group_active() derives from this same roster, so
+-- Solo mode also correctly never defers on a groupmate's med break, for the same reason.
 function adapter.barrier_roster()
+  if mode=='solo' then return {} end
   local candidates={}
   local ok,count=pcall(function() return mq.TLO.Group.Members() end)
   if ok and count then
@@ -196,12 +239,37 @@ function adapter.barrier_roster()
   return barrier:active_names(candidates,mq.gettime(),ROSTER_EXPIRY_MS)
 end
 function adapter.barrier_seen(waypoint_id) return barrier:seen_names(waypoint_id) end
+-- DL-017: the runner keeps calling this unconditionally either way (DL-010's "bark unconditionally on arrival"
+-- invariant is untouched); Solo mode only suppresses the actual chat send, still logging what would have gone
+-- out since that costs almost nothing and can still help read a log (developer's own call).
 function adapter.barrier_announce(waypoint_id)
   local cmd='/g PTAR:WAYPOINT:'..tostring(waypoint_id)..':REACHED'
+  if mode=='solo' then log(cmd..' (Solo mode: not sent)'); return end
   log(cmd); mq.cmd(cmd)
 end
 function adapter.barrier_clear() barrier:clear() end
 function adapter.clear_door_confirmed(id) confirmed_doors[id]=nil end
+-- DL-016: my own med break (local, from TAC's own console lines) versus the group-wide flag (mine or anyone's
+-- still-active announced break, filtered by the same live roster barrier_roster() already computes).
+function adapter.medbreak() return my_medbreak end
+function adapter.medbreak_group_active()
+  local active=barrier:medbreak_active_names(adapter.barrier_roster())
+  return #active>0
+end
+-- Fallback end-detection for TAC's silent medBreakActive clears that still stand the character up (DL-016): if
+-- my own break is still flagged active well past the grace period but I am no longer sitting/ducking, treat
+-- that as an implicit end. Does not close the one remaining silent gap (switching TAC's own mode mid-break,
+-- which does not stand the character up either) -- accepted as a known limitation, not solved here.
+local function check_medbreak_stood(now)
+  if not my_medbreak then return end
+  if not medbreak_started_at or now-medbreak_started_at<MEDBREAK_GRACE_MS then return end
+  local sitting=read_bool(function() return mq.TLO.Me.Sitting() end)
+  local ducking=read_bool(function() return mq.TLO.Me.Ducking() end)
+  if not sitting and not ducking then
+    log('Med break end inferred: no longer sitting/ducking with no explicit end line seen')
+    set_my_medbreak(false,now)
+  end
+end
 local function snapshot()
   local p=adapter.position()
   local w=runner and runner.index and route.waypoints[runner.index]
@@ -261,6 +329,27 @@ local function draw()
   local open,visible=imgui.Begin('Project Triune AutoRoute v'..version.VERSION..'###Project Triune AutoRoute',true)
   if open==false then running=false end
   if visible then
+    -- DL-017: shown once, ever, regardless of which mode is chosen. Proof of notice, not enforcement -- nothing
+    -- forces the user to read it, per the developer's own framing ("we can only give you the information").
+    if not seen_mode_notice then imgui.OpenPopup('Mode Notice') end
+    if imgui.BeginPopupModal('Mode Notice',nil) then
+      imgui.TextWrapped('Group mode is currently in beta and can still behave unexpectedly in some situations. Solo mode is the default and the most reliable option.')
+      imgui.TextWrapped('This setting is local to this character only. It never affects any other PTAR instance -- each one sets its own mode independently.')
+      if imgui.Button('Got it') then
+        seen_mode_notice=true; save_settings()
+        imgui.CloseCurrentPopup()
+      end
+      imgui.EndPopup()
+    end
+    imgui.AlignTextToFramePadding(); imgui.Text('Mode'); imgui.SameLine()
+    local mode_busy=runner and (runner.status=='Running' or runner.status=='Recovering' or
+      runner.status=='Waiting for combat' or runner.status=='Waiting for med break')
+    if mode_busy then imgui.BeginDisabled() end
+    if imgui.Button('Solo') and mode~='solo' then mode='solo'; log('Mode set to solo'); save_settings() end
+    imgui.SameLine(); if imgui.Button('Group') and mode~='group' then mode='group'; log('Mode set to group'); save_settings() end
+    if mode_busy then imgui.EndDisabled() end
+    imgui.SameLine(); imgui.Text('('..(mode=='solo' and 'Solo' or 'Group')..' selected)')
+    if mode_busy then imgui.TextColored(1,0.8,0.2,1,'Pause or Stop to switch modes.') end
     imgui.AlignTextToFramePadding(); imgui.Text('Route'); imgui.SameLine()
     local display=filename or '(no routes found)'
     for _,entry in ipairs(choices) do if entry.file==filename then display=entry.label end end
@@ -317,8 +406,8 @@ local function draw()
       local start_labels={selected='At Selected Waypoint',beginning='At Beginning Waypoint',nearest='At Nearest Valid Waypoint'}
       imgui.SetNextItemWidth(220)
       if imgui.BeginCombo('##runner_start_method',start_labels[start_mode]) then
-        for _,mode in ipairs({'selected','beginning','nearest'}) do
-          if imgui.Selectable(start_labels[mode],start_mode==mode) then start_mode=mode end
+        for _,start_choice in ipairs({'selected','beginning','nearest'}) do
+          if imgui.Selectable(start_labels[start_choice],start_mode==start_choice) then start_mode=start_choice end
         end
         imgui.EndCombo()
       end
@@ -338,18 +427,26 @@ local function draw()
     end
     imgui.Separator()
     imgui.Text('Settings')
-    imgui.AlignTextToFramePadding(); imgui.Text('Door Opening Role'); imgui.SameLine()
-    local role_labels={primary='Primary (only one client)',secondary='Secondary (all other clients)'}
-    imgui.SetNextItemWidth(240)
-    if imgui.BeginCombo('##door_opening_role',role_labels[door_role]) then
-      for _,choice in ipairs({'primary','secondary'}) do
-        if imgui.Selectable(role_labels[choice]..'##door_role',door_role==choice) and door_role~=choice then
-          door_role=choice
-          log('Door role set to '..door_role)
-          save_settings()
+    -- DL-017: a setting meaningful only in Group mode is hidden entirely in Solo mode, not shown read-only --
+    -- a general rule (today's only example is Door Opening Role; a future group-only setting follows the same
+    -- treatment without a fresh discussion).
+    if mode=='group' then
+      imgui.AlignTextToFramePadding(); imgui.Text('Door Opening Role'); imgui.SameLine()
+      local role_labels={primary='Primary (only one client)',secondary='Secondary (all other clients)'}
+      imgui.SetNextItemWidth(240)
+      if imgui.BeginCombo('##door_opening_role',role_labels[door_role]) then
+        for _,choice in ipairs({'primary','secondary'}) do
+          if imgui.Selectable(role_labels[choice]..'##door_role',door_role==choice) and door_role~=choice then
+            door_role=choice
+            log('Door role set to '..door_role)
+            save_settings()
+          end
         end
+        imgui.EndCombo()
       end
-      imgui.EndCombo()
+    else
+      imgui.TextColored(0.6,0.6,0.6,1,'Heartbeat barks and waits for other PTAR clients: Off')
+      imgui.TextColored(0.6,0.6,0.6,1,'Group settings saved for when you switch back.')
     end
     if imgui.Button(diag.echo and 'Console debug: ON' or 'Console debug: OFF') then
       diag:set_echo(not diag.echo,snapshot)
@@ -362,6 +459,8 @@ end
 local settings=settings_mod.read(paths.config,identity)
 if settings.last_route then filename=settings.last_route end
 if settings.door_role then door_role=settings.door_role end
+if settings.mode then mode=settings.mode end
+if settings.seen_mode_notice then seen_mode_notice=settings.seen_mode_notice end
 local echo_default=settings.echo_enabled
 if echo_default==nil then echo_default=version.is_test() end
 diag:set_echo(echo_default,snapshot)
@@ -375,10 +474,12 @@ while running do
   local ok,err=pcall(function()
     mq.doevents()
     local now=mq.gettime()
+    check_medbreak_stood(now)
     if runner then runner:tick(now) end
     -- DL-010: HERE is sent only while actively trying to complete the route (the rule lives in the runner, so
     -- it is unit-tested), so an errored/paused/stopped/completed/dead client drops out of every barrier quickly.
-    if runner and runner:heartbeat_active() and now>=next_heartbeat then
+    -- DL-017: never sent at all in Solo mode -- it exists solely to facilitate Group-mode coordination.
+    if mode=='group' and runner and runner:heartbeat_active() and now>=next_heartbeat then
       next_heartbeat=now+HEARTBEAT_INTERVAL_MS
       mq.cmd('/g PTAR:HERE')
     end

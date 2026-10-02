@@ -846,3 +846,144 @@ test('DL-010: heartbeat_active() is true only while actively trying to complete 
   end)
   expect.equal(st, 'Error'); expect.equal(active, false)
 end)
+
+-- DL-016: pause PTAR during TAC med breaks; defer waypoint/door barrier timers for the group. Two distinct
+-- signals: io.medbreak() is MY OWN local flag (joins the combat interrupt group for nav/backtrack/door/
+-- ground_exit/barrier_wait); io.medbreak_group_active() is the group-wide flag (mine or anyone's, gates
+-- barrier_wait specifically, not ordinary nav/door/ground_exit -- a groupmate medding does not freeze my travel).
+
+test('DL-016 requirement 1/2: an active med break interrupts ordinary nav (Waiting for med break), same shape as combat', function()
+  local rt = far_route()
+  local s = Sim.new()
+  local r = Core.new(rt, s.io)
+  r:start(1, 1000)
+  s.medbreak = true
+  r:tick(1100)
+  expect.equal(r.status, 'Waiting for med break')
+  expect.equal(r.phase, 'medbreak')
+end)
+
+test('DL-016 requirement 9: once my own med break clears, nav resumes toward the same waypoint (re-issuing /nav, same as combat\'s existing resume)', function()
+  local rt = far_route()
+  local s = Sim.new()
+  local r = Core.new(rt, s.io)
+  r:start(1, 1000)
+  s.medbreak = true
+  r:tick(1100)
+  local navs = s.count('nav')
+  s.medbreak = false
+  r:tick(1200)
+  expect.equal(r.phase, 'nav')
+  expect.equal(s.count('nav'), navs + 1)   -- matches DL-006's existing combat-resume-to-nav precedent
+  expect.truthy(s.last('nav')[1] == rt.waypoints[1])
+end)
+
+test('DL-016: med break during ground_exit pauses and resumes via the captured EXIT, joining the same group as combat', function()
+  local rt = ground_route()
+  local r, s, t = to_phase(rt, 'ground_exit')
+  local stops = s.count('nav_stop')
+  s.medbreak = true
+  r:tick(t + 100)
+  expect.equal(r.status, 'Waiting for med break')
+  expect.equal(r.phase, 'medbreak')
+  expect.truthy(s.count('nav_stop') > stops)
+  local navs = s.count('nav')
+  s.medbreak = false
+  r:tick(t + 200)
+  expect.equal(r.phase, 'ground_exit')
+  expect.equal(s.count('nav'), navs + 1)
+  expect.truthy(s.last('nav')[1] == rt.waypoints[1].exit)
+end)
+
+test('DL-016 requirement 3: heartbeat_active() stays true while Waiting for med break', function()
+  local s = Sim.new()
+  local r = Core.new(far_route(), s.io)
+  r:start(1, 1000)
+  s.medbreak = true
+  r:tick(1100)
+  expect.equal(r.status, 'Waiting for med break')
+  expect.equal(r:heartbeat_active(), true)
+end)
+
+test('DL-016: combat takes precedence over a med break if somehow both are true at once (checked first, unchanged order)', function()
+  local rt = far_route()
+  local s = Sim.new()
+  local r = Core.new(rt, s.io)
+  r:start(1, 1000)
+  s.combat = true; s.medbreak = true
+  r:tick(1100)
+  expect.equal(r.status, 'Waiting for combat')
+  expect.equal(r.phase, 'combat')
+end)
+
+test('DL-016 requirement 1: my own med break interrupts an active barrier-wait too, with status Waiting for med break', function()
+  local r, s, t = arrive_at_first_waypoint(nil, function(sim) sim.barrier_roster = { 'Bob' } end)
+  expect.equal(r.phase, 'barrier_wait')
+  s.medbreak = true
+  r:tick(t + 100)
+  expect.equal(r.status, 'Waiting for med break')
+  expect.equal(r.phase, 'medbreak')
+end)
+
+test('DL-016 requirement 5: a groupmate\'s active med break defers entering barrier-wait at all, but REACHED is still barked', function()
+  local r, s, t = arrive_at_first_waypoint(nil, function(sim)
+    sim.barrier_roster = { 'Bob' }
+    sim.medbreak_group_active = true   -- Bob (not me) is already on a med break when I arrive
+  end)
+  expect.equal(r.phase, 'medbreak')
+  expect.equal(s.count('barrier_announce'), 1)        -- DL-010's "bark unconditionally on arrival" rule still holds
+  expect.equal(s.last('barrier_announce')[1], 'wp_001')
+end)
+
+test('DL-016 requirement 5/7: once the group med break ends, the deferred barrier evaluates normally', function()
+  local r, s, t = arrive_at_first_waypoint(nil, function(sim)
+    sim.barrier_roster = { 'Bob' }
+    sim.medbreak_group_active = true
+  end)
+  expect.equal(r.phase, 'medbreak')
+  s.medbreak_group_active = false
+  r:tick(t + 100)
+  expect.equal(r.phase, 'barrier_wait')   -- back to waiting on Bob's REACHED, not released yet
+  s.barrier_seen_map['wp_001'] = { Bob = true }
+  r:tick(t + 200)
+  expect.equal(r.phase, 'nav')
+end)
+
+test('DL-016 requirement 6: a group med break starting mid-wait defers an already-running barrier and extends its deadline by the paused duration', function()
+  local r, s, t = arrive_at_first_waypoint(nil, function(sim) sim.barrier_roster = { 'Bob' } end)
+  expect.equal(r.phase, 'barrier_wait')
+  r:tick(t + 50000)                         -- 50000 ms of real waiting before anyone meds
+  expect.equal(r.phase, 'barrier_wait')
+  s.medbreak_group_active = true
+  r:tick(t + 50100)
+  expect.equal(r.phase, 'medbreak')         -- deferred
+  r:tick(t + 150100)                        -- 100000 ms spent on the break -- well past BARRIER_TIMEOUT_MS on its own
+  expect.equal(r.phase, 'medbreak')         -- still deferred: the clock is not running while paused
+  s.medbreak_group_active = false
+  r:tick(t + 150200)
+  expect.equal(r.phase, 'barrier_wait')     -- resumed
+  r:tick(t + 200200)                        -- 50000 ms more: raw wall-clock total is 200200 ms, past 120000
+  expect.equal(r.phase, 'barrier_wait')     -- NOT timed out: the 100000 ms paused duration does not count
+  expect.falsy(has_log(s, 'TIMEOUT'))
+end)
+
+test('DL-016 requirement 6: the extended deadline still eventually times out, at a point consistent with the extension math (not just "eventually")', function()
+  -- Isolates the extension specifically: without it, 50000 (pre) + 50000 (break) + 60000 (post) = 160000 ms of raw
+  -- wall-clock time would already be well past BARRIER_TIMEOUT_MS (120000) at the first checkpoint below, so a
+  -- mutation that dropped the barrier_started adjustment (letting the clock run through the pause, as combat's
+  -- own behavior already does) would fail this test by timing out too early -- not just by never timing out.
+  local r, s, t = arrive_at_first_waypoint(nil, function(sim) sim.barrier_roster = { 'Bob' } end)
+  r:tick(t + 50000)                         -- 50000 ms of real waiting before anyone meds
+  s.medbreak_group_active = true
+  r:tick(t + 50100)
+  r:tick(t + 100100)                        -- 50000 ms spent on the break
+  s.medbreak_group_active = false
+  r:tick(t + 100200)                        -- resumed; effective elapsed so far ~= 50100 ms
+  r:tick(t + 160200)                        -- 60000 ms more: raw total 160200 ms (past 120000), effective ~110100 ms
+  expect.equal(r.phase, 'barrier_wait')     -- still short of the (extended) deadline
+  expect.falsy(has_log(s, 'TIMEOUT'))
+  -- Effective elapsed is now ~110100 ms; ~9900 ms short of 120000. Push past it.
+  local t_end = tick_until(r, t + 160200, 15000, function() return r.phase ~= 'barrier_wait' end)
+  expect.equal(r.phase, 'nav')
+  expect.truthy(has_log(s, 'TIMEOUT'))
+end)

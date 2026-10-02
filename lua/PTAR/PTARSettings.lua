@@ -22,6 +22,10 @@ function M.read(dir,identity)
   elseif settings.echo_enabled=='false' then settings.echo_enabled=false
   else settings.echo_enabled=nil end
   if settings.door_role~='primary' and settings.door_role~='secondary' then settings.door_role=nil end
+  if settings.mode~='solo' and settings.mode~='group' then settings.mode=nil end
+  if settings.seen_mode_notice=='true' then settings.seen_mode_notice=true
+  elseif settings.seen_mode_notice=='false' then settings.seen_mode_notice=false
+  else settings.seen_mode_notice=nil end
   return settings
 end
 function M.save(dir,identity,settings)
@@ -30,6 +34,8 @@ function M.save(dir,identity,settings)
   if settings.last_route then lines[#lines+1]='last_route='..settings.last_route end
   if settings.echo_enabled~=nil then lines[#lines+1]='echo_enabled='..tostring(settings.echo_enabled) end
   if settings.door_role=='primary' or settings.door_role=='secondary' then lines[#lines+1]='door_role='..settings.door_role end
+  if settings.mode=='solo' or settings.mode=='group' then lines[#lines+1]='mode='..settings.mode end
+  if settings.seen_mode_notice~=nil then lines[#lines+1]='seen_mode_notice='..tostring(settings.seen_mode_notice) end
   local f,e=io.open(path..'.tmp','w'); if not f then return nil,e end
   local wrote,we=f:write(table.concat(lines,'\n')..'\n')
   local closed,ce=f:close()

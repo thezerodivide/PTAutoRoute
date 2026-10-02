@@ -5,7 +5,7 @@
 local M = {}
 
 function M.new()
-  local self = { last_heard = {}, seen = {} }
+  local self = { last_heard = {}, seen = {}, medbreak = {} }
 
   -- Records/refreshes the last time `name` was heard from (a PTAR:HERE heartbeat).
   function self:heartbeat(name, at)
@@ -38,6 +38,28 @@ function M.new()
   -- state. Heartbeat liveness is untouched -- a teammate that is still actually running PTAR stays known active.
   function self:clear()
     self.seen = {}
+    self.medbreak = {}
+  end
+
+  -- Med-break tracking (DL-016): a toggle-able set, unlike REACHED's monotonic one -- a break can start and stop
+  -- more than once in a single run. `name` is in the set from a PTAR:MEDBREAK:START bark until a matching END.
+  function self:mark_medbreak(name)
+    self.medbreak[name] = true
+  end
+
+  function self:clear_medbreak(name)
+    self.medbreak[name] = nil
+  end
+
+  -- Filters `candidate_names` (the adapter's already heartbeat-filtered roster) down to those currently marked as
+  -- on a med break. Liveness is not re-checked here -- a name that drops out of the live roster is no longer a
+  -- candidate at all, so it is excluded without this module needing to know why.
+  function self:medbreak_active_names(candidate_names)
+    local out = {}
+    for _, name in ipairs(candidate_names) do
+      if self.medbreak[name] then out[#out + 1] = name end
+    end
+    return out
   end
 
   return self
