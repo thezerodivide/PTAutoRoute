@@ -633,7 +633,7 @@ local editor_box=actors.register('PTAR_Editor_Mailbox',function(message)
 end)
 if not editor_box then log('Runner link: could not register the Editor mailbox PTAR_Editor_Mailbox') end
 -- Ask the Runner whether `file` is in use; `on_result` receives the outcome (reply, no_runner or refuse) exactly once.
-local function runner_check(file,on_result)
+local function runner_check(file,on_result,header_override,label)
   local server,character=identity()
   if not editor_box then
     local result={kind='refuse',reason='the Editor could not register its messaging mailbox',elapsed=0}
@@ -644,20 +644,36 @@ local function runner_check(file,on_result)
   local sent=tracker:send(function(result)
     local detail=result.kind=='reply' and ((result.busy and 'BUSY' or 'OK')..' (Runner status '..tostring(result.status)..')')
       or (result.kind=='no_runner' and 'no Runner found (RoutingFailed)') or ('refused: '..tostring(result.reason))
-    log('Runner link: check '..tostring(file)..' result: '..detail..'; status code '..tostring(result.code)..'; elapsed '
-      ..tostring(result.elapsed)..' ms')
+    log('Runner link: check '..tostring(file)..(label and (' ['..label..']') or '')..' result: '..detail..'; status code '
+      ..tostring(result.code)..'; elapsed '..tostring(result.elapsed)..' ms')
     on_result(result)
   end)
   if not sent then log('Runner link: check '..tostring(file)..' not sent: another check is still waiting'); return false end
-  log('Runner link: check '..tostring(file)..' sent (server '..tostring(server)..', character '..tostring(character)..')')
-  editor_box:send(runner_link.header(server,character),{id='check',file=file},function(status,reply)
+  local header=header_override or runner_link.header(server,character)
+  log('Runner link: check '..tostring(file)..(label and (' ['..label..']') or '')..' sent (header: mailbox '..tostring(header.mailbox)
+    ..', absolute '..tostring(header.absolute_mailbox)..', server '..tostring(header.server)..', character '..tostring(header.character)..')')
+  editor_box:send(header,{id='check',file=file},function(status,reply)
     local ok,content=pcall(function() return reply and reply.content end)
     tracker:receive(status,ok and content or nil,actors.ResponseStatus)
   end)
   return true
 end
 log('Editor session started (build '..version.VERSION..'); log '..diag:path())
-runner_check('(startup probe)',function() end)
+-- TEMPORARY DIAGNOSTIC (DL-022, test.21): the startup probe is sent four ways, one after another, and every status is logged,
+-- to find out which part of the address stops a running Runner from being found. Read-only. Remove once the cause is known.
+local server_name,character_name=identity()
+local probe_variants={
+  {label='full header',header=runner_link.header(server_name,character_name)},
+  {label='mailbox only',header={mailbox=runner_link.MAILBOX,absolute_mailbox=true}},
+  {label='mailbox + character',header={mailbox=runner_link.MAILBOX,absolute_mailbox=true,character=character_name}},
+  {label='mailbox + server',header={mailbox=runner_link.MAILBOX,absolute_mailbox=true,server=server_name}},
+}
+local function run_probe(index)
+  local variant=probe_variants[index]
+  if not variant then return end
+  runner_check('(startup probe)',function() run_probe(index+1) end,variant.header,variant.label)
+end
+run_probe(1)
 
 mq.imgui.init('PTAREditor',draw)
 while running do tracker:tick(); mq.delay(100) end

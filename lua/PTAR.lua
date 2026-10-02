@@ -723,6 +723,14 @@ local link_box=actors.register(runner_link.MAILBOX,function(message)
   local request=message.content
   if type(request)~='table' then log('Runner link: ignored a message with no content'); return end
   if request.id=='check' then
+    -- TEMPORARY DIAGNOSTIC (DL-022, test.21): log who sent the message, to see the exact server/character strings MacroQuest uses.
+    local okc,sender=pcall(function() return message.sender end)
+    if okc and type(sender)=='table' then
+      local parts={}
+      for k,v in pairs(sender) do parts[#parts+1]=tostring(k)..'='..tostring(v) end
+      table.sort(parts)
+      log('Runner link: sender identity: '..table.concat(parts,', '))
+    else log('Runner link: sender identity unavailable') end
     local status=runner and runner.status or nil
     local reply=runner_link.check_reply(request.file,loaded_file,status)
     log('Runner link: check '..tostring(request.file)..' -> '..(reply.busy and 'BUSY' or 'OK')..' (runner '..(status or 'none')
