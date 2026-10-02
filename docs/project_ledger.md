@@ -6,7 +6,7 @@ When new evidence resolves an open question, update this ledger before building 
 
 ## Up next
 
-**v1.0 released, 2026-09-29.** `PTARVersion.VERSION` is `1.0.0`. The UI redesign is merged ([DL-015](decision_log.md#dl-015--ui-redesign-review-functional-parity-check-against-pre-redesign-baseline-retrofit-entry)), the spec's stale "fix required"/"deferred" passages (Sections 3, 8, 14, 20, 21) have been updated to cite the DL entries that resolved them, `README.md` exists for first-time users, and the syntax check + full 157-test suite both pass clean on the release tree. Every decision-log item is either live-verified or deliberately deferred to a post-1.0 feature release (route chaining, the primary-drops gap, the full future UI-design pass beyond this rework). Next up is genuinely post-1.0 work: route chaining, and whatever the developer picks up next.
+**v1.0 released, 2026-09-29.** `PTARVersion.VERSION` is `1.0.0`. The UI redesign is merged ([DL-015](decision_log.md#dl-015--ui-redesign-review-functional-parity-check-against-pre-redesign-baseline-retrofit-entry)), the spec's stale "fix required"/"deferred" passages (Sections 3, 8, 14, 20, 21) have been updated to cite the DL entries that resolved them, `README.md` exists for first-time users, and the syntax check + full 157-test suite both pass clean on the release tree. First post-1.0 feature now in design: [DL-016](decision_log.md#dl-016--pause-ptar-during-tac-med-breaks-defer-waypointdoor-barrier-timers-for-the-group) (pause during TAC med breaks, defer barrier timers) — design fully agreed 2026-10-02, implementation not started.
 
 Everything below this point predates the release and is retained as history; see "Resolved behavior" for the current state of each item.
 
@@ -14,7 +14,7 @@ Everything below this point predates the release and is retained as history; see
 
 Only unbuilt entries are listed; everything else is delivered. Reasoning and order rules live in the entries.
 
-Everything below is now built; nothing remains in this section as of `0.2.0-test.25` (2026-09-28).
+- [DL-016](decision_log.md#dl-016--pause-ptar-during-tac-med-breaks-defer-waypointdoor-barrier-timers-for-the-group) (med-break pause and barrier deferral) — design fully agreed, 2026-10-02. Depends on DL-010 (barrier roster/heartbeat) and DL-013 (the TAC-console mq.event pattern), both already built and live-verified. Not yet implemented.
 
 ## Pending Live Verification
 
@@ -98,6 +98,7 @@ Questions intentionally unresolved — do not decide these unilaterally; surface
 - **Full UI redesign, both Runner and Editor windows (spec §11, §20):** current layout for both windows is not considered satisfactory; a redesign is planned as a future revision and is explicitly out of scope for the current spec document.
 - **TAC integration, if ever added (spec §3, §15):** out of scope for this version; if added later, scope is explicitly limited to starting TAC in Manual mode when the user presses Start — no broader TAC state management. Not a current open question, but noted so a broader TAC integration is never assumed in without a fresh scoping discussion.
 - **[DL-009](decision_log.md#dl-009--levitate-breaks-ground-drop-traversal-fall-detection-known-limitation-deferred)** — Levitate breaks ground-drop fall-detection: confirmed, deliberately deferred as a known limitation (don't levitate before a fall-based traversal).
+- **[DL-016](decision_log.md#dl-016--pause-ptar-during-tac-med-breaks-defer-waypointdoor-barrier-timers-for-the-group)** — med-break pause/barrier deferral: design fully agreed, 2026-10-02, not yet implemented. One accepted known limitation, by design: switching TAC's own mode away from Manual while a med break is active produces no observable signal at all, so an affected client would stay in the `medbreak` phase until manually recovered. Accepted because it requires a deliberate mode change mid-route, not a side effect of combat/HP/mana.
 - **[DL-010](decision_log.md#dl-010--multi-client-waypoint-barrier-sync-agreed-design-implementation-deliberately-held)** — multi-client waypoint barrier sync (solves the DL-008-discovered drift/combat-desync problem): design fully agreed, built as `0.2.0-test.25`, **live-verified end to end, 2026-09-28** (see Resolved behavior above). Scope reduced after an over-engineering review (built the core barrier + active-only heartbeat + proceed-on-timeout; traversal-departure choreography and other extras deferred until live logs justify them). No remaining release-blocking open items: the primary-drops gap (item 5) is intended v1.0 behavior, deferred to a post-1.0 feature release (2026-09-29); the chat-ordering assumption is checked, not contradicted; the barrier-timeout path is opportunistic-only. "Door Role" relabel deferred to the pre-1.0 UI design pass.
 
 ## Out of scope
