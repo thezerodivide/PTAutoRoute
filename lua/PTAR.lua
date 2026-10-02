@@ -25,7 +25,7 @@ local seen_mode_notice=false
 local view='full'
 local full_size={w=560,h=390}
 local apply_size=nil
-local COMPACT_SIZE={w=520,h=120}
+local COMPACT_SIZE={w=380,h=120}
 local confirmed_doors={}
 local choices={}
 local runner,route
@@ -366,6 +366,15 @@ local function route_selector()
     end
     imgui.EndCombo()
   end
+  -- Right edge of the combo as an offset from the window's left edge (the unit SameLine takes), or nil if the
+  -- ImGui reads fail. TAC's own scripts read these same calls and tolerate either a vector or two numbers.
+  local ok,right=pcall(function()
+    local function xy(a,b) if type(a)=='number' then return a,b end return a.x,a.y end
+    local item_x=xy(imgui.GetItemRectMax())
+    local cursor_x=xy(imgui.GetCursorScreenPos())
+    return item_x-(cursor_x-imgui.GetCursorPosX())
+  end)
+  if ok and type(right)=='number' then return right end
 end
 -- Start with the method and waypoint chosen in full view; compact view calls this too.
 local function do_start()
@@ -375,8 +384,9 @@ local function do_start()
 end
 -- DL-018: compact view -- Route, Status, then Start / Pause-Resume / Stop / Full. Deliberately quiet: no messages,
 -- notices or block explanations (full view has them).
+local compact_full_w=40  -- Full button's measured width, refined from the previous frame
 local function draw_compact()
-  route_selector()
+  local combo_right=route_selector()
   if not runner then return end
   imgui.Text('Status: '..runner.status)
   local busy=runner:tac_busy() or runner:traversal_blocking()
@@ -391,7 +401,13 @@ local function draw_compact()
   local pr_clicked=imgui.Button(pr_labels[pr]..'##pr')
   if pr_off then imgui.EndDisabled() end
   imgui.SameLine(); local stop_clicked=imgui.Button('Stop')
-  right_align(60); local full_clicked=imgui.Button('Full')
+  if combo_right then imgui.SameLine(combo_right-compact_full_w) else right_align(60) end
+  local full_clicked=imgui.Button('Full')
+  local ok,w=pcall(function()
+    local function xy(a,b) if type(a)=='number' then return a,b end return a.x,a.y end
+    return xy(imgui.GetItemRectMax())-xy(imgui.GetItemRectMin())
+  end)
+  if ok and type(w)=='number' and w>0 then compact_full_w=w end
   if start_clicked then do_start() end
   if pr_clicked then
     if pr=='pause' then runner:pause() elseif pr=='resume' then runner:resume(mq.gettime()) end
