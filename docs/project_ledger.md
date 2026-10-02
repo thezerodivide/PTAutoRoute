@@ -27,8 +27,11 @@ Implemented code changes not yet confirmed by live testing. Check this before as
 **Future testing — developer decision, 2026-10-02: these will be tested later; they stay on this list and are reported as unconfirmed whenever asked:**
 - DL-017: the Solo med-break announcement fix (`cbb9afe`): reload `lua`, run a med break in Solo, expect `(Solo mode: not sent)` on MEDBREAK START/END.
 - DL-017: the mode-switch guard at Recovering.
+
+**Group mode is beta — developer decision, 2026-10-02.** Solo mode is the priority and the fully tested default; Group mode is use-at-your-own-risk until the developer states a group-mode test pass is starting. All group-only verification is deferred to that pass and stays listed here as unconfirmed:
 - DL-016: multi-character barrier deferral (requirements 5, 6, 7) in Group mode with two or more characters.
 - DL-016: a med break starting during a barrier wait, and the Sitting/Ducking fallback.
+- DL-017: Group mode's heartbeat, waypoint-reached and door-open chat actually being sent on this build (only their absence in Solo has been checked).
 
 **Opportunistic only** — can't be deliberately engineered, will be confirmed whenever the right conditions occur naturally during ordinary play:
 - ~~DL-007~~ — **live-verified 2026-09-28, moved to Resolved behavior below.**
