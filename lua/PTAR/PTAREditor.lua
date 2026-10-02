@@ -9,6 +9,15 @@ local path_setup=require('PTAR.PTARPaths')
 local version=require('PTAR.PTARVersion')
 local paths,path_error=path_setup.prepare(mq.configDir)
 if not paths then error('PTAR directory setup stopped: '..tostring(path_error)) end
+-- DL-022: the Editor's own log file (PTAR_Editor_<server>_<character>.log), separate from the Runner's.
+local logger=require('PTAR.PTARLog')
+local function identity()
+  local function read(fn) local ok,v=pcall(fn); return ok and v or 'unknown' end
+  return read(function() return mq.TLO.EverQuest.Server() end),read(function() return mq.TLO.Me.Name() end)
+end
+local diag=logger.new(paths.logs,identity,mq.gettime,version.VERSION,function(m) mq.print(m) end,'PTAR_Editor')
+local function log(text) diag:event(text) end
+log('Editor session started (build '..version.VERSION..'); log '..diag:path())
 local route,filename,selected,last_creation,last_capture
 local state,message='Unsaved','Create or load a route.'
 local file_draft={value='NewRoute'}
@@ -23,6 +32,7 @@ local action=1
 local running=true
 local edit={}; local edit_original={}; local route_edit={}; local route_edit_original={}
 local pending_selection=nil; local delete_confirm_id=nil; local replace_confirm_id=nil
+local delete_target=nil; local delete_popup_open=false   -- DL-022: the route named in the Delete Route popup
 local TYPES={'normal','door','finish'}
 local ACTIONS={
   {label='Add Waypoint',kind='normal',where='append'},
@@ -261,6 +271,26 @@ local function do_load()
   route_edit_original={name=route_edit.name,description=route_edit.description}
   state=notice and 'Recovered' or 'Saved (loaded)'; set_message(notice or 'Route loaded.')
 end
+-- DL-022: delete the route the confirmation popup names. Deletes the route's index entry, then the route file and its .bak
+-- and .tmp siblings (PTARFiles.delete_route); shows the approved message; logs every step; refreshes the Editor's list. If the
+-- deleted route is the one open in the Editor and the delete succeeded, the Editor unloads it (dropping unsaved edits).
+-- The Runner is not touched: a loaded runner keeps its in-memory route, and its list updates on Refresh Routes.
+local function do_confirm_delete()
+  local target=delete_target
+  delete_target=nil
+  if not target then return end
+  log('Delete route: '..target..' confirmed')
+  local result=files.delete_route(paths.config,target)
+  for _,line in ipairs(files.delete_log_lines(result)) do log(line) end
+  refresh_routes()
+  set_message(files.delete_message(result))
+  if result.ok and filename and filename:match('[^/\\]+$')==target then
+    route=nil; filename=nil; selected=nil; last_creation=nil; last_capture=nil; traverse_capture=nil
+    edit={}; edit_original={}; route_edit={}; route_edit_original={}; pending_selection=nil
+    delete_confirm_id=nil; replace_confirm_id=nil; state='Unsaved'
+    log('Delete route: unloaded '..target..' from the Editor')
+  end
+end
 local function commit_route_edit()
   if not route then return end
   local old_name,old_description=route.route_name,route.description
@@ -368,6 +398,33 @@ local function door_after_combo(id,obj)
     imgui.EndCombo()
   end
 end
+-- DL-022: the Delete Route button and its confirmation popup. Delete Route only opens the popup; nothing is deleted
+-- until Confirm Delete. (Its own function so draw() stays under LuaJIT's 60-upvalue limit.)
+local function draw_delete_controls()
+  imgui.SameLine()
+  local no_route_selected=existing_file==nil
+  if no_route_selected then imgui.BeginDisabled() end
+  local delete_clicked=imgui.Button('Delete Route')
+  if no_route_selected then imgui.EndDisabled() end
+  if delete_clicked and existing_file then
+    delete_target=existing_file; delete_popup_open=true
+    log('Delete route: '..delete_target..' requested')
+  end
+  if delete_popup_open then imgui.OpenPopup('Delete Route'); delete_popup_open=false end
+  imgui.SetNextWindowSize(ImVec2(470,150),ImGuiCond.FirstUseEver)
+  if imgui.BeginPopupModal('Delete Route',nil) then
+    imgui.Text("Please confirm you'd like to delete the following file:")
+    imgui.Text('File Name: '..tostring(delete_target))
+    imgui.Spacing()
+    if imgui.Button('Confirm Delete') then do_confirm_delete(); imgui.CloseCurrentPopup() end
+    imgui.SameLine()
+    if imgui.Button('Cancel') then
+      log('Delete route: '..tostring(delete_target)..' cancelled')
+      delete_target=nil; imgui.CloseCurrentPopup()
+    end
+    imgui.EndPopup()
+  end
+end
 local function draw()
   imgui.SetNextWindowSize(ImVec2(800,680),ImGuiCond.FirstUseEver)
   imgui.SetNextWindowPos(ImVec2(55,55),ImGuiCond.FirstUseEver)
@@ -383,6 +440,7 @@ local function draw()
     end
     if imgui.Button('Load Route') then do_load() end
     imgui.SameLine(); if imgui.Button('Refresh Routes') then refresh_routes() end
+    draw_delete_controls()
     imgui.SameLine(); if imgui.Button(show_create and 'Hide New Route' or 'New Route...') then show_create=not show_create end
     if show_create then
       text_input('New route filename (PTAR_ added)',file_draft,'value')
@@ -612,69 +670,6 @@ local function draw()
 end
 refresh_routes()
 
--- DL-022: the Editor's own log file (PTAR_Editor_<server>_<character>.log), and the link to the Runner on this character.
--- The link asks the Runner, over a named actor mailbox scoped to this server and character, whether a route is in use.
--- At startup it sends one probe check and only logs the outcome, so the link can be verified before deletion relies on it.
-local actors=require('actors')
-local logger=require('PTAR.PTARLog')
-local runner_link=require('PTAR.PTARRunnerLink')
-local function identity()
-  local function read(fn) local ok,v=pcall(fn); return ok and v or 'unknown' end
-  return read(function() return mq.TLO.EverQuest.Server() end),read(function() return mq.TLO.Me.Name() end)
-end
-local diag=logger.new(paths.logs,identity,mq.gettime,version.VERSION,function(m) mq.print(m) end,'PTAR_Editor')
-local function log(text) diag:event(text) end
-local tracker=runner_link.tracker(mq.gettime)
--- The Editor sends from a mailbox of its own. The module-level actors.send has no dropbox: with a callback it silently
--- sends nothing and never reports a status (found live 2026-10-02, build test.19); sending through a registered dropbox
--- carries the reply address and delivers delivery statuses to the callback.
-local editor_box=actors.register('PTAR_Editor_Mailbox',function(message)
-  log('Runner link: ignored an unsolicited message sent to the Editor mailbox')
-end)
-if not editor_box then log('Runner link: could not register the Editor mailbox PTAR_Editor_Mailbox') end
--- Ask the Runner whether `file` is in use; `on_result` receives the outcome (reply, no_runner or refuse) exactly once.
-local function runner_check(file,on_result,header_override,label)
-  local server,character=identity()
-  if not editor_box then
-    local result={kind='refuse',reason='the Editor could not register its messaging mailbox',elapsed=0}
-    log('Runner link: check '..tostring(file)..' result: refused: '..result.reason..'; status code nil; elapsed 0 ms')
-    on_result(result)
-    return false
-  end
-  local sent=tracker:send(function(result)
-    local detail=result.kind=='reply' and ((result.busy and 'BUSY' or 'OK')..' (Runner status '..tostring(result.status)..')')
-      or (result.kind=='no_runner' and 'no Runner found (RoutingFailed)') or ('refused: '..tostring(result.reason))
-    log('Runner link: check '..tostring(file)..(label and (' ['..label..']') or '')..' result: '..detail..'; status code '
-      ..tostring(result.code)..'; elapsed '..tostring(result.elapsed)..' ms')
-    on_result(result)
-  end)
-  if not sent then log('Runner link: check '..tostring(file)..' not sent: another check is still waiting'); return false end
-  local header=header_override or runner_link.header(server,character)
-  log('Runner link: check '..tostring(file)..(label and (' ['..label..']') or '')..' sent (header: mailbox '..tostring(header.mailbox)
-    ..', absolute '..tostring(header.absolute_mailbox)..', server '..tostring(header.server)..', character '..tostring(header.character)..')')
-  editor_box:send(header,{id='check',file=file},function(status,reply)
-    local ok,content=pcall(function() return reply and reply.content end)
-    tracker:receive(status,ok and content or nil,actors.ResponseStatus)
-  end)
-  return true
-end
-log('Editor session started (build '..version.VERSION..'); log '..diag:path())
--- TEMPORARY DIAGNOSTIC (DL-022, test.21): the startup probe is sent four ways, one after another, and every status is logged,
--- to find out which part of the address stops a running Runner from being found. Read-only. Remove once the cause is known.
-local server_name,character_name=identity()
-local probe_variants={
-  {label='full header',header=runner_link.header(server_name,character_name)},
-  {label='mailbox only',header={mailbox=runner_link.MAILBOX,absolute_mailbox=true}},
-  {label='mailbox + character',header={mailbox=runner_link.MAILBOX,absolute_mailbox=true,character=character_name}},
-  {label='mailbox + server',header={mailbox=runner_link.MAILBOX,absolute_mailbox=true,server=server_name}},
-}
-local function run_probe(index)
-  local variant=probe_variants[index]
-  if not variant then return end
-  runner_check('(startup probe)',function() run_probe(index+1) end,variant.header,variant.label)
-end
-run_probe(1)
-
 mq.imgui.init('PTAREditor',draw)
-while running do tracker:tick(); mq.delay(100) end
+while running do mq.delay(100) end
 mq.imgui.destroy('PTAREditor')

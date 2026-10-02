@@ -97,3 +97,163 @@ test('DL-021: has_endpoint - an empty route, or one of only normal waypoints, ha
   expect.equal(Files.has_endpoint(route('r', 'z', {})), false)
   expect.equal(Files.has_endpoint(route('r', 'z', { normal('wp_001'), normal('wp_002') })), false)
 end)
+
+-- ================================================================ DL-022 (delete a route from the Editor)
+-- Requirements (developer, 2026-10-02): the route's entry is removed from the index FIRST (atomic), then the route file and
+-- its .bak/.tmp siblings are deleted as one set; if the index update fails nothing is deleted; if the file cannot be deleted
+-- after the entry is gone the route leaves the list, the file stays, and the message points to Register Existing File;
+-- success is reported only after every step. The delete path is built only from an accepted PTAR route file name. Real
+-- failures are produced with real files (an open file cannot be deleted on Windows; a directory in the way blocks the index
+-- write), not with test hooks.
+local function exists(path) local f = io.open(path, 'rb'); if f then f:close(); return true end; return false end
+local function read_all(path) local f = assert(io.open(path, 'rb')); local t = f:read('*a'); f:close(); return t end
+local function set_of(dir)
+  write_route(dir, 'PTAR_A.lua', route('Alpha', 'sleeper', { normal('wp_001'), finish('wp_002') }))
+  write_route(dir, 'PTAR_B.lua', route('Beta', 'sleeper', { normal('wp_001'), finish('wp_002') }))
+  write_file(dir .. '', 'PTAR_A.lua.bak', 'bak text')
+  write_file(dir .. '', 'PTAR_A.lua.tmp', 'tmp text')
+  write_index(dir, { 'PTAR_A.lua', 'PTAR_B.lua' })
+end
+local function listed(dir) local out = {}; for _, e in ipairs(Files.scan(dir)) do out[#out + 1] = e.file end; return table.concat(out, ',') end
+-- The index is written in text mode, so it has CRLF line endings on Windows; compare it line-ending-neutral.
+local function names_in_index(dir) return (read_all(dir .. '/PTAR_Routes.txt'):gsub('\r', '')) end
+
+-- ---------------------------------------------------------------- Files.remove (the index entry)
+test('DL-022: remove takes only the named entry out of the index and keeps the others in order', function()
+  local dir = T.with_temp_dir()
+  write_index(dir, { 'PTAR_A.lua', 'PTAR_B.lua', 'PTAR_C.lua' })
+  expect.equal(Files.remove(dir, 'PTAR_B.lua'), true)
+  expect.equal(names_in_index(dir), 'PTAR_A.lua\nPTAR_C.lua\n')
+end)
+
+test('DL-022: removing a name that is not listed succeeds and leaves the index as it was', function()
+  local dir = T.with_temp_dir()
+  write_index(dir, { 'PTAR_A.lua' })
+  expect.equal(Files.remove(dir, 'PTAR_Z.lua'), true)
+  expect.equal(names_in_index(dir), 'PTAR_A.lua\n')
+end)
+
+test('DL-022: removing keeps a .bak of the previous index (same atomic pattern as adding)', function()
+  local dir = T.with_temp_dir()
+  write_index(dir, { 'PTAR_A.lua', 'PTAR_B.lua' })
+  Files.remove(dir, 'PTAR_A.lua')
+  expect.equal(read_all(dir .. '/PTAR_Routes.txt.bak'), 'PTAR_A.lua\nPTAR_B.lua\n')
+end)
+
+test('DL-022: when the index cannot be written, remove fails with a reason and the index is unchanged', function()
+  local dir = T.with_temp_dir()
+  write_index(dir, { 'PTAR_A.lua', 'PTAR_B.lua' })
+  os.execute('mkdir "' .. (dir .. '/PTAR_Routes.txt.tmp'):gsub('/', '\\') .. '"')   -- a directory where the .tmp file must go
+  local ok, err = Files.remove(dir, 'PTAR_A.lua')
+  expect.equal(ok, nil); expect.truthy(type(err) == 'string' and #err > 0)
+  expect.equal(names_in_index(dir), 'PTAR_A.lua\nPTAR_B.lua\n')
+end)
+
+-- ---------------------------------------------------------------- Files.delete_route (the whole set)
+test('DL-022: deleting a route removes its index entry, the route file, and the .bak and .tmp siblings, and nothing else', function()
+  local dir = T.with_temp_dir(); set_of(dir)
+  local r = Files.delete_route(dir, 'PTAR_A.lua')
+  expect.equal(r.ok, true); expect.equal(r.index_removed, true); expect.equal(#r.removed, 3)
+  expect.equal(exists(dir .. '/PTAR_A.lua'), false); expect.equal(exists(dir .. '/PTAR_A.lua.bak'), false)
+  expect.equal(exists(dir .. '/PTAR_A.lua.tmp'), false)
+  expect.equal(exists(dir .. '/PTAR_B.lua'), true)                       -- another route is untouched
+  expect.equal(listed(dir), 'PTAR_B.lua')
+end)
+
+test('DL-022: a route with no siblings is deleted too', function()
+  local dir = T.with_temp_dir()
+  write_route(dir, 'PTAR_A.lua', route('Alpha', 'z', { normal('wp_001'), finish('wp_002') })); write_index(dir, { 'PTAR_A.lua' })
+  local r = Files.delete_route(dir, 'PTAR_A.lua')
+  expect.equal(r.ok, true); expect.equal(#r.removed, 1); expect.equal(listed(dir), '')
+end)
+
+test('DL-022: a route whose file is already gone is still taken out of the list and reported as deleted', function()
+  local dir = T.with_temp_dir()
+  write_index(dir, { 'PTAR_A.lua' })
+  local r = Files.delete_route(dir, 'PTAR_A.lua')
+  expect.equal(r.ok, true); expect.equal(r.index_removed, true); expect.equal(#r.removed, 0)
+  expect.equal(listed(dir), '')
+end)
+
+test('DL-022: a name that is not an accepted PTAR route file name deletes nothing and touches nothing', function()
+  local dir = T.with_temp_dir()
+  local outside = dir .. '/../PTAR_Outside_' .. tostring(os.time()) .. '.lua'
+  write_file(dir, '../' .. outside:match('[^/]+$'), 'outside')
+  write_index(dir, { 'PTAR_A.lua' })
+  for _, bad in ipairs({ '../' .. outside:match('[^/]+$'), 'PTAR_x.txt', 'notes.lua', '', 'PTAR_a b.lua' }) do
+    local r = Files.delete_route(dir, bad)
+    expect.equal(r.ok, false, bad); expect.equal(r.stage, 'name', bad)
+  end
+  expect.equal(exists(outside), true)
+  expect.equal(Files.delete_route(dir, nil).stage, 'name')
+  expect.equal(names_in_index(dir), 'PTAR_A.lua\n')
+  os.remove(outside)
+end)
+
+test('DL-022: if the index cannot be updated nothing is deleted (route file and siblings stay)', function()
+  local dir = T.with_temp_dir(); set_of(dir)
+  os.execute('mkdir "' .. (dir .. '/PTAR_Routes.txt.tmp'):gsub('/', '\\') .. '"')
+  local r = Files.delete_route(dir, 'PTAR_A.lua')
+  expect.equal(r.ok, false); expect.equal(r.stage, 'index'); expect.equal(r.index_removed, false)
+  expect.equal(exists(dir .. '/PTAR_A.lua'), true); expect.equal(exists(dir .. '/PTAR_A.lua.bak'), true)
+  expect.equal(exists(dir .. '/PTAR_A.lua.tmp'), true)
+end)
+
+test('DL-022: if the route file cannot be deleted the entry is already gone, the file stays, and the failure names the file stage', function()
+  local dir = T.with_temp_dir(); set_of(dir)
+  local held = assert(io.open(dir .. '/PTAR_A.lua', 'rb'))              -- an open file cannot be deleted on Windows
+  local r = Files.delete_route(dir, 'PTAR_A.lua')
+  held:close()
+  expect.equal(r.ok, false); expect.equal(r.stage, 'file'); expect.equal(r.index_removed, true)
+  expect.truthy(type(r.error) == 'string' and #r.error > 0)
+  expect.equal(exists(dir .. '/PTAR_A.lua'), true)
+  expect.equal(listed(dir), 'PTAR_B.lua')                                -- it has left the list
+end)
+
+test('DL-022: if a sibling cannot be deleted the route is gone, the other sibling is still removed, and the sibling stage names it', function()
+  local dir = T.with_temp_dir(); set_of(dir)
+  local held = assert(io.open(dir .. '/PTAR_A.lua.bak', 'rb'))
+  local r = Files.delete_route(dir, 'PTAR_A.lua')
+  held:close()
+  expect.equal(r.ok, false); expect.equal(r.stage, 'sibling'); expect.equal(r.failed_file, 'PTAR_A.lua.bak')
+  expect.equal(exists(dir .. '/PTAR_A.lua'), false); expect.equal(exists(dir .. '/PTAR_A.lua.tmp'), false)
+  expect.equal(exists(dir .. '/PTAR_A.lua.bak'), true)
+  expect.equal(r.index_removed, true)
+end)
+
+-- ---------------------------------------------------------------- the messages (exact wording, developer-approved)
+test('DL-022: the success message is exactly the approved text', function()
+  local r = { ok = true, name = 'PTAR_A.lua', index_removed = true, removed = { 'PTAR_A.lua' } }
+  expect.equal(Files.delete_message(r), 'Delete confirmed: PTAR_A.lua has been deleted. Refresh Routes in the Runner to update its list.')
+end)
+
+test('DL-022: each failure and partial failure has its own explanation, and none of them says "Delete confirmed"', function()
+  local cases = {
+    { { ok = false, stage = 'name', name = 'x.txt' }, 'Delete failed: x.txt is not a PTAR route file name.' },
+    { { ok = false, stage = 'index', name = 'PTAR_A.lua', error = 'Permission denied' },
+      'Delete failed: PTAR_A.lua was not deleted. The route list could not be updated: Permission denied' },
+    { { ok = false, stage = 'file', name = 'PTAR_A.lua', error = 'Permission denied', index_removed = true },
+      'Delete incomplete: PTAR_A.lua was removed from the list, but the file could not be deleted: Permission denied. Use Register Existing File to restore it.' },
+    { { ok = false, stage = 'sibling', name = 'PTAR_A.lua', failed_file = 'PTAR_A.lua.bak', error = 'Permission denied', index_removed = true },
+      'Delete incomplete: PTAR_A.lua was deleted, but PTAR_A.lua.bak could not be removed: Permission denied. Remove it by hand before reusing the name.' },
+  }
+  for _, c in ipairs(cases) do
+    expect.equal(Files.delete_message(c[1]), c[2])
+    expect.equal(Files.delete_message(c[1]):find('Delete confirmed', 1, true), nil)
+  end
+end)
+
+test('DL-022: the Editor log lines follow the approved forms for success and for each failure stage', function()
+  local ok = Files.delete_log_lines({ ok = true, name = 'PTAR_A.lua', index_removed = true,
+    removed = { 'PTAR_A.lua', 'PTAR_A.lua.bak' } })
+  expect.equal(table.concat(ok, '|'), 'Delete route: index entry removed|Delete route: removed PTAR_A.lua|Delete route: removed PTAR_A.lua.bak')
+  local idx = Files.delete_log_lines({ ok = false, stage = 'index', name = 'PTAR_A.lua', error = 'Permission denied', removed = {} })
+  expect.equal(table.concat(idx, '|'), 'Delete route failed: PTAR_A.lua: the route list could not be updated: Permission denied')
+  local file = Files.delete_log_lines({ ok = false, stage = 'file', name = 'PTAR_A.lua', error = 'Permission denied', index_removed = true, removed = {} })
+  expect.equal(table.concat(file, '|'), 'Delete route: index entry removed|Delete route failed: PTAR_A.lua: could not delete the file: Permission denied')
+  local sib = Files.delete_log_lines({ ok = false, stage = 'sibling', name = 'PTAR_A.lua', failed_file = 'PTAR_A.lua.bak', error = 'Permission denied',
+    index_removed = true, removed = { 'PTAR_A.lua' } })
+  expect.equal(table.concat(sib, '|'), 'Delete route: index entry removed|Delete route: removed PTAR_A.lua|Delete route failed: PTAR_A.lua: could not remove PTAR_A.lua.bak: Permission denied')
+  local bad = Files.delete_log_lines({ ok = false, stage = 'name', name = 'x.txt' })
+  expect.equal(table.concat(bad, '|'), 'Delete route failed: x.txt: not a PTAR route file name')
+end)
