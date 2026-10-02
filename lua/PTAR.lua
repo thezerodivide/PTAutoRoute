@@ -332,6 +332,10 @@ local function draw()
     -- DL-017: shown once, ever, regardless of which mode is chosen. Proof of notice, not enforcement -- nothing
     -- forces the user to read it, per the developer's own framing ("we can only give you the information").
     if not seen_mode_notice then imgui.OpenPopup('Mode Notice') end
+    -- A popup with no size set rendered as a narrow strip live (2026-10-02). Popups are not saved to the ini, so
+    -- FirstUseEver (already used for the main window) applies on every open.
+    imgui.SetNextWindowSize(ImVec2(440,200),ImGuiCond.FirstUseEver)
+    imgui.SetNextWindowPos(ImVec2(80,80),ImGuiCond.FirstUseEver)
     if imgui.BeginPopupModal('Mode Notice',nil) then
       imgui.TextWrapped('Group mode is currently in beta and can still behave unexpectedly in some situations. Solo mode is the default and the most reliable option.')
       imgui.TextWrapped('This setting is local to this character only. It never affects any other PTAR instance -- each one sets its own mode independently.')
