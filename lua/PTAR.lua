@@ -29,6 +29,7 @@ local COMPACT_SIZE={w=300,h=120}
 local COMPACT_MIN_W=230
 local COMPACT_ROUTE_MIN_W=240  -- compact Route dropdown: never narrower than this...
 local full_route_w=nil          -- ...and never wider than the Route dropdown in full view (measured there)
+local compact_w=nil              -- the user's compact window width, remembered when they leave compact view
 local compact_min_w=nil         -- narrowest compact window: minimum dropdown and the whole button row, plus padding
 local compact_pr_w=nil          -- fixed width of the compact Pause/Resume button, so Stop/Full Mode never shift
 local constraints_logged=false
@@ -345,6 +346,8 @@ local function right_align(offset)
   local ok,width=pcall(function() return imgui.GetWindowWidth() end)
   if ok and type(width)=='number' then imgui.SameLine(width-offset) else imgui.SameLine() end
 end
+-- ImGui reads that may return a vector or two numbers (TAC's own scripts tolerate both).
+local function xy(a,b) if type(a)=='number' then return a,b end return a.x,a.y end
 -- Switching views changes presentation only. Going compact remembers the full-view window size (read inside the
 -- window, so call from draw()); going full restores it. The size is applied to exactly one frame.
 local function set_view(target)
@@ -353,13 +356,15 @@ local function set_view(target)
     local ok,w,h=pcall(function() return imgui.GetWindowSize() end)
     if ok and type(w)=='number' and type(h)=='number' and w>0 and h>0 then full_size={w=w,h=h}
     else log('Could not read the full-view window size; Full will restore '..full_size.w..'x'..full_size.h) end
+  else
+    local ok,w=pcall(function() return (xy(imgui.GetWindowSize())) end)
+    if ok and type(w)=='number' and w>0 then compact_w=w
+    else log('Could not read the compact window width; compact will reopen at its default width') end
   end
   view=target; apply_size=target
   log('View set to '..target)
   save_settings()
 end
--- ImGui reads that may return a vector or two numbers (TAC's own scripts tolerate both).
-local function xy(a,b) if type(a)=='number' then return a,b end return a.x,a.y end
 -- Left and right edge of the last item, as offsets from the window's left edge (the unit SameLine takes), or nil.
 local function last_item_extent()
   local ok,l,r=pcall(function()
@@ -457,7 +462,7 @@ local function draw()
     end)
     if not ok and not constraints_logged then constraints_logged=true; log('Compact height lock unavailable: '..tostring(err)) end
   end
-  if apply_size=='compact' then imgui.SetNextWindowSize(ImVec2(compact_min_w or COMPACT_SIZE.w,compact_h or COMPACT_SIZE.h),ImGuiCond.Always)
+  if apply_size=='compact' then imgui.SetNextWindowSize(ImVec2(math.max(compact_w or 0,compact_min_w or COMPACT_SIZE.w),compact_h or COMPACT_SIZE.h),ImGuiCond.Always)
   elseif apply_size=='full' then imgui.SetNextWindowSize(ImVec2(full_size.w,full_size.h),ImGuiCond.Always)
   elseif view=='compact' then imgui.SetNextWindowSize(ImVec2(compact_min_w or COMPACT_SIZE.w,COMPACT_SIZE.h),ImGuiCond.FirstUseEver)
   else imgui.SetNextWindowSize(ImVec2(full_size.w,full_size.h),ImGuiCond.FirstUseEver) end
