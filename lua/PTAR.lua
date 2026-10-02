@@ -27,8 +27,10 @@ local full_size={w=560,h=390}
 local apply_size=nil
 local COMPACT_SIZE={w=300,h=120}
 local COMPACT_MIN_W=230
-local COMPACT_ROUTE_W=240  -- fixed width of the compact Route dropdown
-local compact_min_w=nil    -- window width at which no empty space is left right of the dropdown/Full
+local COMPACT_ROUTE_MIN_W=240  -- compact Route dropdown: never narrower than this...
+local full_route_w=nil          -- ...and never wider than the Route dropdown in full view (measured there)
+local compact_min_w=nil         -- narrowest compact window: minimum dropdown and the whole button row, plus padding
+local compact_pr_w=nil          -- fixed width of the compact Pause/Resume button, so Stop/Full Mode never shift
 local constraints_logged=false
 local compact_h=nil  -- content height measured at the end of the previous compact frame
 local confirmed_doors={}
@@ -356,10 +358,27 @@ local function set_view(target)
   log('View set to '..target)
   save_settings()
 end
--- Route selector, shared by full and compact view so the guard and the load behave identically.
-local function route_selector(fill)
+-- ImGui reads that may return a vector or two numbers (TAC's own scripts tolerate both).
+local function xy(a,b) if type(a)=='number' then return a,b end return a.x,a.y end
+-- Left and right edge of the last item, as offsets from the window's left edge (the unit SameLine takes), or nil.
+local function last_item_extent()
+  local ok,l,r=pcall(function()
+    local origin=xy(imgui.GetCursorScreenPos())-imgui.GetCursorPosX()
+    return xy(imgui.GetItemRectMin())-origin,xy(imgui.GetItemRectMax())-origin
+  end)
+  if ok and type(l)=='number' and type(r)=='number' then return l,r end
+end
+-- Route selector, shared by full and compact view so the guard and the load behave identically. In compact view
+-- the dropdown takes the room the window gives it, between its minimum width and the full-view dropdown's width.
+local function route_selector(compact)
   imgui.AlignTextToFramePadding(); imgui.Text('Route'); imgui.SameLine()
-  if fill then imgui.SetNextItemWidth(fill) end
+  if compact then
+    local max_w=full_route_w or math.floor(0.65*(full_size.w-16))
+    local width=COMPACT_ROUTE_MIN_W
+    local ok,avail=pcall(function() return (xy(imgui.GetContentRegionAvail())) end)
+    if ok and type(avail)=='number' then width=math.max(COMPACT_ROUTE_MIN_W,math.min(avail,max_w)) end
+    imgui.SetNextItemWidth(width)
+  end
   local display=filename or '(no routes found)'
   for _,entry in ipairs(choices) do if entry.file==filename then display=entry.label end end
   if imgui.BeginCombo('##runner_route',display) then
@@ -372,15 +391,9 @@ local function route_selector(fill)
     end
     imgui.EndCombo()
   end
-  -- Right edge of the combo as an offset from the window's left edge (the unit SameLine takes), or nil if the
-  -- ImGui reads fail. TAC's own scripts read these same calls and tolerate either a vector or two numbers.
-  local ok,right=pcall(function()
-    local function xy(a,b) if type(a)=='number' then return a,b end return a.x,a.y end
-    local item_x=xy(imgui.GetItemRectMax())
-    local cursor_x=xy(imgui.GetCursorScreenPos())
-    return item_x-(cursor_x-imgui.GetCursorPosX())
-  end)
-  if ok and type(right)=='number' then return right end
+  local left,right=last_item_extent()
+  if left and not compact then full_route_w=right-left end
+  return left,right
 end
 -- Start with the method and waypoint chosen in full view; compact view calls this too.
 local function do_start()
@@ -388,33 +401,40 @@ local function do_start()
   elseif start_mode=='beginning' then runner:start(1,mq.gettime())
   else runner:start_nearest(mq.gettime()) end
 end
--- DL-018: compact view -- Route, Status, then Start / Pause-Resume / Stop / Full. Deliberately quiet: no messages,
--- notices or block explanations (full view has them).
-local compact_full_w=40  -- Full button's measured width, refined from the previous frame
+-- DL-018: compact view -- Route, Status, then Start / Pause-Resume / Stop / Full Mode. Deliberately quiet: no
+-- messages, notices or block explanations (full view has them). Button positions do not depend on the window
+-- or dropdown width.
 local function draw_compact_rows()
-  local combo_right=route_selector(COMPACT_ROUTE_W)
-  if combo_right then compact_min_w=combo_right+8 end
+  local combo_left=route_selector(true)
   if not runner then return end
   imgui.Text('Status: '..runner.status)
   local busy=runner:tac_busy() or runner:traversal_blocking()
   if busy then imgui.BeginDisabled() end
   local start_clicked=imgui.Button('Start')
   if busy then imgui.EndDisabled() end
+  -- Frame padding is learned from the Start button (its width minus its text), then used to give Pause/Resume
+  -- the width of its longest label whichever label it shows.
+  if not compact_pr_w then
+    local sl,sr=last_item_extent()
+    local ok,tw_start=pcall(function() return (xy(imgui.CalcTextSize('Start'))) end)
+    local ok2,tw_pr=pcall(function() return (xy(imgui.CalcTextSize('Pause/Resume'))) end)
+    if sl and ok and ok2 and type(tw_start)=='number' and type(tw_pr)=='number' then
+      compact_pr_w=tw_pr+(sr-sl-tw_start)
+    end
+  end
   imgui.SameLine()
   local pr=runner:pause_resume_state()
   local pr_labels={pause='Pause',resume='Resume',disabled='Pause/Resume'}
   local pr_off=(pr=='disabled') or (pr=='resume' and busy)
   if pr_off then imgui.BeginDisabled() end
-  local pr_clicked=imgui.Button(pr_labels[pr]..'##pr')
+  local pr_clicked
+  if compact_pr_w then pr_clicked=imgui.Button(pr_labels[pr]..'##pr',compact_pr_w,0)
+  else pr_clicked=imgui.Button(pr_labels[pr]..'##pr') end
   if pr_off then imgui.EndDisabled() end
   imgui.SameLine(); local stop_clicked=imgui.Button('Stop')
-  if combo_right then imgui.SameLine(combo_right-compact_full_w) else right_align(60) end
-  local full_clicked=imgui.Button('Full')
-  local ok,w=pcall(function()
-    local function xy(a,b) if type(a)=='number' then return a,b end return a.x,a.y end
-    return xy(imgui.GetItemRectMax())-xy(imgui.GetItemRectMin())
-  end)
-  if ok and type(w)=='number' and w>0 then compact_full_w=w end
+  imgui.SameLine(); local full_clicked=imgui.Button('Full Mode')
+  local _,row_right=last_item_extent()
+  if combo_left and row_right then compact_min_w=math.max(combo_left+COMPACT_ROUTE_MIN_W,row_right)+8 end
   if start_clicked then do_start() end
   if pr_clicked then
     if pr=='pause' then runner:pause() elseif pr=='resume' then runner:resume(mq.gettime()) end
@@ -435,9 +455,9 @@ local function draw()
     end)
     if not ok and not constraints_logged then constraints_logged=true; log('Compact height lock unavailable: '..tostring(err)) end
   end
-  if apply_size=='compact' then imgui.SetNextWindowSize(ImVec2(COMPACT_SIZE.w,compact_h or COMPACT_SIZE.h),ImGuiCond.Always)
+  if apply_size=='compact' then imgui.SetNextWindowSize(ImVec2(compact_min_w or COMPACT_SIZE.w,compact_h or COMPACT_SIZE.h),ImGuiCond.Always)
   elseif apply_size=='full' then imgui.SetNextWindowSize(ImVec2(full_size.w,full_size.h),ImGuiCond.Always)
-  elseif view=='compact' then imgui.SetNextWindowSize(ImVec2(COMPACT_SIZE.w,COMPACT_SIZE.h),ImGuiCond.FirstUseEver)
+  elseif view=='compact' then imgui.SetNextWindowSize(ImVec2(compact_min_w or COMPACT_SIZE.w,COMPACT_SIZE.h),ImGuiCond.FirstUseEver)
   else imgui.SetNextWindowSize(ImVec2(full_size.w,full_size.h),ImGuiCond.FirstUseEver) end
   apply_size=nil
   imgui.SetNextWindowPos(ImVec2(55,55),ImGuiCond.FirstUseEver)
