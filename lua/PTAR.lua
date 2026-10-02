@@ -435,7 +435,9 @@ local function draw_compact_rows()
   imgui.SameLine(); local full_clicked=imgui.Button('Full Mode')
   local _,row_right=last_item_extent()
   if combo_left and row_right then compact_min_w=math.max(combo_left+COMPACT_ROUTE_MIN_W,row_right)+8 end
-  if start_clicked then do_start() end
+  -- DL-018 (developer, 2026-10-02): compact Start always starts at the nearest valid waypoint, ignoring the
+  -- full-view start method and waypoint.
+  if start_clicked then runner:start_nearest(mq.gettime()) end
   if pr_clicked then
     if pr=='pause' then runner:pause() elseif pr=='resume' then runner:resume(mq.gettime()) end
   end
