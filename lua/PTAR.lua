@@ -77,6 +77,9 @@ local function set_my_medbreak(active,now)
   if active==my_medbreak then return end
   my_medbreak=active; medbreak_started_at=active and now or nil
   local cmd='/g PTAR:MEDBREAK:'..(active and 'START' or 'END')
+  -- DL-017: my own flag still toggles in Solo (it drives my own pause), but the announcement is a Group-mode
+  -- coordination bark like the others, so it is not sent. Found live 2026-10-02: this send was missed at first.
+  if mode=='solo' then log(cmd..' (Solo mode: not sent)'); return end
   log(cmd); mq.cmd(cmd)
 end
 mq.event('ptar_medbreak_start','#*#[Triune] Med Break -- #*#',function(line)
