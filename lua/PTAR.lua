@@ -25,7 +25,12 @@ local seen_mode_notice=false
 local view='full'
 local full_size={w=560,h=390}
 local apply_size=nil
-local COMPACT_SIZE={w=380,h=120}
+local COMPACT_SIZE={w=300,h=120}
+local COMPACT_MIN_W=230
+local COMPACT_ROUTE_W=240  -- fixed width of the compact Route dropdown
+local compact_min_w=nil    -- window width at which no empty space is left right of the dropdown/Full
+local constraints_logged=false
+local compact_h=nil  -- content height measured at the end of the previous compact frame
 local confirmed_doors={}
 local choices={}
 local runner,route
@@ -352,8 +357,9 @@ local function set_view(target)
   save_settings()
 end
 -- Route selector, shared by full and compact view so the guard and the load behave identically.
-local function route_selector()
+local function route_selector(fill)
   imgui.AlignTextToFramePadding(); imgui.Text('Route'); imgui.SameLine()
+  if fill then imgui.SetNextItemWidth(fill) end
   local display=filename or '(no routes found)'
   for _,entry in ipairs(choices) do if entry.file==filename then display=entry.label end end
   if imgui.BeginCombo('##runner_route',display) then
@@ -385,8 +391,9 @@ end
 -- DL-018: compact view -- Route, Status, then Start / Pause-Resume / Stop / Full. Deliberately quiet: no messages,
 -- notices or block explanations (full view has them).
 local compact_full_w=40  -- Full button's measured width, refined from the previous frame
-local function draw_compact()
-  local combo_right=route_selector()
+local function draw_compact_rows()
+  local combo_right=route_selector(COMPACT_ROUTE_W)
+  if combo_right then compact_min_w=combo_right+8 end
   if not runner then return end
   imgui.Text('Status: '..runner.status)
   local busy=runner:tac_busy() or runner:traversal_blocking()
@@ -415,8 +422,20 @@ local function draw_compact()
   if stop_clicked then runner:stop() end
   if full_clicked then set_view('full') end
 end
+local function draw_compact()
+  draw_compact_rows()
+  -- Height follows the content (dead space below the buttons is waste); width stays user-resizable.
+  local ok,y=pcall(function() return imgui.GetCursorPosY() end)
+  if ok and type(y)=='number' and y>0 then compact_h=y+6 end
+end
 local function draw()
-  if apply_size=='compact' then imgui.SetNextWindowSize(ImVec2(COMPACT_SIZE.w,COMPACT_SIZE.h),ImGuiCond.Always)
+  if view=='compact' and compact_h then
+    local ok,err=pcall(function()
+      imgui.SetNextWindowSizeConstraints(ImVec2(compact_min_w or COMPACT_MIN_W,compact_h),ImVec2(10000,compact_h))
+    end)
+    if not ok and not constraints_logged then constraints_logged=true; log('Compact height lock unavailable: '..tostring(err)) end
+  end
+  if apply_size=='compact' then imgui.SetNextWindowSize(ImVec2(COMPACT_SIZE.w,compact_h or COMPACT_SIZE.h),ImGuiCond.Always)
   elseif apply_size=='full' then imgui.SetNextWindowSize(ImVec2(full_size.w,full_size.h),ImGuiCond.Always)
   elseif view=='compact' then imgui.SetNextWindowSize(ImVec2(COMPACT_SIZE.w,COMPACT_SIZE.h),ImGuiCond.FirstUseEver)
   else imgui.SetNextWindowSize(ImVec2(full_size.w,full_size.h),ImGuiCond.FirstUseEver) end
