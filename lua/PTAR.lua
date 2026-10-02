@@ -656,7 +656,7 @@ local function draw()
         end
         imgui.EndCombo()
       end
-      if pending then
+      if pending and filename~=nil then   -- DL-021: with no displayed route (no routes for the zone) nothing will load
         imgui.TextColored(0.6,0.6,0.6,1,'Until the route loads, "At Selected Waypoint" starts at its first waypoint.')
       end
       if start_clicked and ensure_loaded() then do_start() end
