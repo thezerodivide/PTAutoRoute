@@ -1307,3 +1307,104 @@ for _, name in ipairs({ 'nav', 'backtrack', 'ground_exit', 'door', 'barrier_wait
     end
   end
 end
+
+-- ================================================================ DL-021 build 1 (run_executing)
+-- Requirement (developer, 2026-10-02): a run has EXECUTED when, after a Start or Resume has passed the start
+-- checks, the runner for the first time in that run issues a navigation command toward a route target (io.nav),
+-- a door click (io.door), or manual traversal movement (io.forward / io.vertical). At that moment, once per run,
+-- io.run_executing(route.zone_short_name) is called with the route's own stored starting zone. Not counted:
+-- stop commands, turning to face, TAC queries/commands, chat announcements, arriving within radius with no further
+-- action, a finish reached with no movement, and any attempt that fails a start check or fails in navigate()
+-- before the first /nav. A run that executes and later fails still counts.
+local function executed(s) return s.count('run_executing') end
+
+test('DL-021: a start that issues its first /nav reports the run as executing once, with the route\'s stored zone', function()
+  local s = Sim.new()
+  local r = Core.new(far_route(), s.io)
+  r:start(1, 1000)
+  expect.equal(s.count('nav'), 1)
+  expect.equal(executed(s), 1)
+  expect.equal(s.last('run_executing')[1], 'zone')
+end)
+
+test('DL-021: the reported zone is the route\'s stored zone even if the character\'s zone changes at the first action', function()
+  local s = Sim.new()
+  local nav = s.io.nav
+  s.io.nav = function(w) nav(w); s.zone = 'elsewhere' end   -- the zone reading changes as the first /nav is issued
+  local r = Core.new(far_route(), s.io)
+  r:start(1, 1000)
+  expect.equal(executed(s), 1)
+  expect.equal(s.last('run_executing')[1], 'zone')
+end)
+
+test('DL-021: further legs of the same run do not report again, a new run does', function()
+  local rt = route({ wp('wp_001', 0, -100, 0, { radius = 5 }), wp('wp_002', 0, -200, 0, { type = 'finish', radius = 5 }) })
+  local s = Sim.new()
+  local r = Core.new(rt, s.io)
+  r:start(1, 1000)
+  s.p = { x = 0, y = -100, z = 0 }; r:tick(1100)      -- arrives, next /nav issued
+  expect.truthy(s.count('nav') >= 2)
+  expect.equal(executed(s), 1)
+  r:stop(); s.p = { x = 0, y = 0, z = 0 }; r:start(1, 5000)   -- away from wp_001, so this start issues a /nav
+  expect.equal(executed(s), 2)
+end)
+
+test('DL-021: a start that fails the zone check does not report', function()
+  local s = Sim.new(); s.zone = 'elsewhere'
+  local r = Core.new(far_route(), s.io)
+  r:start(1, 1000)
+  expect.equal(r.status, 'Error')
+  expect.equal(executed(s), 0)
+end)
+
+test('DL-021: a start that fails in navigate() before any /nav (no path) does not report', function()
+  local s = Sim.new(); s.path = false
+  local r = Core.new(far_route(), s.io)
+  r:start(1, 1000)
+  expect.equal(s.count('nav'), 0)
+  expect.equal(executed(s), 0)
+end)
+
+test('DL-021: a start at a finish waypoint already within radius completes without movement and does not report', function()
+  local rt = route({ wp('wp_001', 0, 0, 0, { type = 'finish', radius = 5 }) })
+  local s = Sim.new()
+  local r = Core.new(rt, s.io)
+  r:start(1, 1000); r:tick(1100)
+  expect.equal(r.status, 'Completed')
+  expect.equal(s.count('nav'), 0)
+  expect.equal(executed(s), 0)
+end)
+
+test('DL-021: a run that executes and later fails still counts (reported once, before the failure)', function()
+  local s = Sim.new()
+  local r = Core.new(far_route(), s.io)
+  r:start(1, 1000)
+  s.zone = 'elsewhere'; r:tick(1100)
+  expect.equal(r.status, 'Error')
+  expect.equal(executed(s), 1)
+end)
+
+test('DL-021: a TAC step that fails before any movement does not report', function()
+  local r, s, t = at_tac_before(nil, function(sim) sim.tac_applies = false end)
+  tick_until(r, t, 60000, function() return r.status == 'Error' end)
+  expect.equal(r.status, 'Error')
+  expect.equal(s.count('nav'), 0)
+  expect.equal(executed(s), 0)
+end)
+
+test('DL-021: a door click counts as executing even with no /nav before it', function()
+  local r, s, t = arrive_at_first_waypoint(door_first_route())
+  expect.equal(s.count('nav'), 0)
+  expect.equal(executed(s), 0)                          -- arrival and the door phase alone are not an action
+  tick_until(r, t, 5000, function() return s.count('door') > 0 end)
+  expect.truthy(s.count('door') > 0)
+  expect.equal(executed(s), 1)
+end)
+
+test('DL-021: turning to face does not count; the manual traversal movement that follows does', function()
+  local r, s = to_phase(water_route(), 'traverse_facing')
+  expect.equal(executed(s), 0)
+  local r2, s2 = to_phase(water_route(), 'traverse_approach')
+  expect.truthy(s2.count('forward') > 0)
+  expect.equal(executed(s2), 1)
+end)

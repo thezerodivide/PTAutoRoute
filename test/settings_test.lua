@@ -107,3 +107,65 @@ test('DL-018 req 9/8: saving view leaves the other settings (mode, door_role, la
   expect.equal(s.view, 'compact'); expect.equal(s.mode, 'group'); expect.equal(s.door_role, 'secondary')
   expect.equal(s.last_route, 'PTAR_X.lua')
 end)
+
+-- ================================================================ DL-021 build 1 (per-zone remembered route)
+-- Requirement (developer, 2026-10-02): a route is remembered against its stored starting zone EXACTLY as stored,
+-- and nothing may silently skip persistence because of the zone's characters. Storage is one
+-- `zone_route=<percent-encoded zone> <file>` line per zone. In build 1 `last_route` is unchanged.
+local function zr(zone_routes) return { zone_routes = zone_routes } end
+
+test('DL-021: a fresh directory reads zone_routes as an empty table', function()
+  local dir = T.with_temp_dir()
+  local s = Settings.read(dir, identity)
+  expect.equal(type(s.zone_routes), 'table')
+  expect.equal(next(s.zone_routes), nil)
+end)
+
+test('DL-021: one remembered route per zone round-trips through save and read', function()
+  local dir = T.with_temp_dir()
+  expect.equal(Settings.save(dir, identity, zr({ sleeper = 'PTAR_SleepersTombKera.lua', eastwastes = 'PTAR_EW.lua' })), true)
+  local s = Settings.read(dir, identity)
+  expect.equal(s.zone_routes.sleeper, 'PTAR_SleepersTombKera.lua')
+  expect.equal(s.zone_routes.eastwastes, 'PTAR_EW.lua')
+end)
+
+test('DL-021: zone strings with spaces, =, %, tabs, newlines and non-ASCII bytes are stored exactly as given', function()
+  local dir = T.with_temp_dir()
+  local zones = { 'a b', 'x=y', '100%', 'with\ttab', 'two\nlines', 'cr\rlf', 'caf\195\169', '%41', 'plus+and-dash_under', ' lead', 'trail ' }
+  local map = {}
+  for i, z in ipairs(zones) do map[z] = 'PTAR_R' .. i .. '.lua' end
+  expect.equal(Settings.save(dir, identity, zr(map)), true)
+  local s = Settings.read(dir, identity)
+  for i, z in ipairs(zones) do
+    expect.equal(s.zone_routes[z], 'PTAR_R' .. i .. '.lua', 'zone ' .. string.format('%q', z))
+  end
+end)
+
+test('DL-021: saving again replaces a zone\'s remembered route and leaves other zones alone', function()
+  local dir = T.with_temp_dir()
+  Settings.save(dir, identity, zr({ sleeper = 'PTAR_A.lua', other = 'PTAR_B.lua' }))
+  Settings.save(dir, identity, zr({ sleeper = 'PTAR_C.lua', other = 'PTAR_B.lua' }))
+  local s = Settings.read(dir, identity)
+  expect.equal(s.zone_routes.sleeper, 'PTAR_C.lua')
+  expect.equal(s.zone_routes.other, 'PTAR_B.lua')
+end)
+
+test('DL-021: malformed zone_route lines (no file, bad escape, unacceptable file name) are ignored, good ones kept', function()
+  local dir = T.with_temp_dir()
+  local f = assert(io.open(Settings.path(dir, identity), 'w'))
+  f:write('zone_route=nofile\nzone_route=bad%zz PTAR_X.lua\nzone_route=zone ..%2F..%2Fevil.lua\nzone_route=good PTAR_OK.lua\n')
+  f:close()
+  local s = Settings.read(dir, identity)
+  expect.equal(s.zone_routes.good, 'PTAR_OK.lua')
+  local n = 0; for _ in pairs(s.zone_routes) do n = n + 1 end
+  expect.equal(n, 1)
+end)
+
+test('DL-021 build 1: last_route, door_role and mode still round-trip beside zone_routes (startup unchanged)', function()
+  local dir = T.with_temp_dir()
+  Settings.save(dir, identity, { last_route = 'PTAR_Last.lua', door_role = 'secondary', mode = 'group',
+    zone_routes = { sleeper = 'PTAR_A.lua' } })
+  local s = Settings.read(dir, identity)
+  expect.equal(s.last_route, 'PTAR_Last.lua'); expect.equal(s.door_role, 'secondary'); expect.equal(s.mode, 'group')
+  expect.equal(s.zone_routes.sleeper, 'PTAR_A.lua')
+end)

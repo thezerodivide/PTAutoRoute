@@ -24,6 +24,25 @@ local function tac_word(command) return command=='pause' and 'paused' or 'runnin
 
 function M.new(route,io,opts)
   opts=opts or {}
+  -- DL-021: the first route-directed movement or door action of a run (navigation, a door click, manual
+  -- traversal movement) reports io.run_executing(<the route's stored starting zone>) once per run. Stop commands,
+  -- turning to face, TAC steps and chat announcements are deliberately not counted. start() re-arms it.
+  local raw_io=io
+  local executing_reported=false
+  local function note_executing()
+    if executing_reported then return end
+    executing_reported=true
+    raw_io.run_executing(route.zone_short_name)
+  end
+  local function counted(name)
+    return function(...)
+      local a,b,c=raw_io[name](...)
+      note_executing()
+      return a,b,c
+    end
+  end
+  io=setmetatable({nav=counted('nav'),door=counted('door'),forward=counted('forward'),vertical=counted('vertical')},
+    {__index=raw_io})
   local self={route=route,io=io,status='Ready',message='Select a waypoint and Start.',selected=1,
     index=nil,last_good=nil,attempt=0,backtracked=false,forward=false,vertical=nil,door_tried=false}
   local waypoints=route.waypoints
@@ -372,6 +391,7 @@ function M.new(route,io,opts)
   end
   function self:start(index,now)
     if traversal_blocked() then return end
+    executing_reported=false
     halt()
     if not waypoints[index] then fail('Invalid waypoint selection'); return end
     if io.zone()~=route.zone_short_name then fail('Wrong zone: expected '..route.zone_short_name); return end

@@ -20,6 +20,10 @@ local door_role='primary'
 -- one-time notice modal's job is proof of notice, not enforcement (nothing forces the user to read it).
 local mode='solo'
 local seen_mode_notice=false
+-- DL-021: the route file loaded into the runner (not necessarily the dropdown's selection) and, per starting zone
+-- exactly as stored, the route a run last executed.
+local loaded_file=nil
+local zone_routes={}
 -- DL-018: 'full' (default) or 'compact'. full_size remembers the user's full-view window size when they go compact
 -- so Full restores it; apply_size forces the window size for exactly one frame after a view switch.
 local view='full'
@@ -53,7 +57,7 @@ local function log(message)
 end
 local function save_settings()
   settings_mod.save(paths.config,identity,{last_route=filename,echo_enabled=diag.echo,door_role=door_role,
-    mode=mode,seen_mode_notice=seen_mode_notice,view=view})
+    mode=mode,seen_mode_notice=seen_mode_notice,view=view,zone_routes=zone_routes})
 end
 mq.event('ptar_door_open',"#1# tells the group, '#2#'",function(line,sender,message)
   local id=tonumber(message:match('^PTAR:DOOR:(%d+):OPEN$'))
@@ -245,6 +249,14 @@ function adapter.tac_state() return tac:take() end
 -- Solo mode also correctly never defers on a groupmate's med break, for the same reason.
 -- DL-019: a group barrier applies only in Group mode; in Solo the runner skips it and says nothing about waiting.
 function adapter.group_barrier() return mode=='group' end
+-- DL-021: the runner reports once per run when it first performs a route-directed action. Remember the loaded route
+-- against the route's own stored starting zone (never the character's current zone).
+function adapter.run_executing(zone)
+  if not loaded_file then return end
+  zone_routes[zone]=loaded_file
+  log('Route remembered for zone '..zone..': '..loaded_file)
+  save_settings()
+end
 function adapter.barrier_roster()
   if mode=='solo' then return {} end
   local candidates={}
@@ -336,7 +348,7 @@ local function load_route()
   if #loaded.waypoints==0 or not endpoint then
     notice='Route is still being captured; add a Finish or Manual handoff waypoint before running.'; return
   end
-  route=loaded; runner=machine.new(route,adapter)
+  route=loaded; runner=machine.new(route,adapter); loaded_file=filename
   notice='Loaded '..route.route_name..' ('..#route.waypoints..' waypoints).\nLog: '..diag:path()
   log('Loaded '..path..' with '..#route.waypoints..' waypoints')
   diag:debug('Route load snapshot: '..snapshot())
@@ -611,6 +623,7 @@ if settings.last_route then filename=settings.last_route end
 if settings.door_role then door_role=settings.door_role end
 if settings.mode then mode=settings.mode end
 if settings.view then view=settings.view end
+if settings.zone_routes then zone_routes=settings.zone_routes end
 if settings.seen_mode_notice then seen_mode_notice=settings.seen_mode_notice end
 local echo_default=settings.echo_enabled
 if echo_default==nil then echo_default=version.is_test() end

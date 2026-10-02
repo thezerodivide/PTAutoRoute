@@ -65,6 +65,7 @@ function M.new()
   end
   io.barrier_announce = function(waypoint_id) rec('barrier_announce', waypoint_id) end
   io.group_barrier = function() return s.group_barrier end
+  io.run_executing = function(zone) rec('run_executing', zone) end
   io.barrier_roster = function() return s.barrier_roster end
   io.barrier_seen = function(waypoint_id) return s.barrier_seen_map[waypoint_id] or {} end
   io.barrier_clear = function() rec('barrier_clear') end
