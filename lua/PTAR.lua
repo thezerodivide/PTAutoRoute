@@ -334,8 +334,18 @@ local function draw()
     if not seen_mode_notice then imgui.OpenPopup('Mode Notice') end
     -- A popup with no size set rendered as a narrow strip live (2026-10-02). Popups are not saved to the ini, so
     -- FirstUseEver (already used for the main window) applies on every open.
-    imgui.SetNextWindowSize(ImVec2(440,200),ImGuiCond.FirstUseEver)
-    imgui.SetNextWindowPos(ImVec2(80,80),ImGuiCond.FirstUseEver)
+    -- Centered on the game window using ImGui.GetIO().DisplaySize, the same read TAC's own windows use; falls back
+    -- to a fixed position if the display size cannot be read.
+    local notice_w,notice_h=440,200
+    local notice_x,notice_y=80,80
+    local size_ok,display_w,display_h=pcall(function()
+      local io=imgui.GetIO(); return io.DisplaySize.x,io.DisplaySize.y
+    end)
+    if size_ok and display_w and display_h and display_w>notice_w and display_h>notice_h then
+      notice_x=(display_w-notice_w)/2; notice_y=(display_h-notice_h)/2
+    end
+    imgui.SetNextWindowSize(ImVec2(notice_w,notice_h),ImGuiCond.FirstUseEver)
+    imgui.SetNextWindowPos(ImVec2(notice_x,notice_y),ImGuiCond.FirstUseEver)
     if imgui.BeginPopupModal('Mode Notice',nil) then
       imgui.TextWrapped('Group mode is currently in beta and can still behave unexpectedly in some situations. Solo mode is the default and the most reliable option.')
       imgui.TextWrapped('This setting is local to this character only. It never affects any other PTAR instance -- each one sets its own mode independently.')
