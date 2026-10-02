@@ -16,6 +16,9 @@ function M.new()
     -- Scripted barrier roster (DL-010): other required teammates (default none, i.e. solo), and per-waypoint
     -- REACHED names already seen (tests populate this to simulate a teammate's bark arriving).
     barrier_roster = {}, barrier_seen_map = {},
+    -- Whether a group barrier applies at all (DL-019): true = Group mode (default, so every older test is a
+    -- Group-mode test), false = Solo mode, where the real adapter also reports an empty roster.
+    group_barrier = true,
     -- Scripted med break (DL-016): my own local flag (from catching my own TAC's console lines) is separate
     -- from the group-wide flag (from the PTAR:MEDBREAK:START/END roster, which may include names other than me).
     medbreak = false, medbreak_group_active = false,
@@ -61,6 +64,7 @@ function M.new()
     return v
   end
   io.barrier_announce = function(waypoint_id) rec('barrier_announce', waypoint_id) end
+  io.group_barrier = function() return s.group_barrier end
   io.barrier_roster = function() return s.barrier_roster end
   io.barrier_seen = function(waypoint_id) return s.barrier_seen_map[waypoint_id] or {} end
   io.barrier_clear = function() rec('barrier_clear') end

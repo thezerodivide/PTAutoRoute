@@ -243,6 +243,8 @@ function adapter.tac_state() return tac:take() end
 -- immediately" path (the same path a true solo run already took before Solo mode existed as a concept) --
 -- no change needed in PTARRunnerCore.lua at all. medbreak_group_active() derives from this same roster, so
 -- Solo mode also correctly never defers on a groupmate's med break, for the same reason.
+-- DL-019: a group barrier applies only in Group mode; in Solo the runner skips it and says nothing about waiting.
+function adapter.group_barrier() return mode=='group' end
 function adapter.barrier_roster()
   if mode=='solo' then return {} end
   local candidates={}

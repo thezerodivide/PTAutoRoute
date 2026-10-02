@@ -1076,3 +1076,138 @@ test('DL-018 req 6: Pause/Resume is disabled in Manual handoff', function()
   expect.equal(r.status, 'Manual handoff')
   expect.equal(r:pause_resume_state(), 'disabled')
 end)
+
+-- ================================================================ DL-019 (Solo makes no group-wait claim)
+-- Requirements (developer, 2026-10-02): R2 in Solo mode neither the status nor the log claims PTAR is waiting
+-- for a group; R3 Group-mode wording and behavior are unchanged; Solo keeps its existing combat and med-break
+-- pause behavior. The tests look for false group-WAIT claims specifically, not the word "group" in general.
+-- Solo is `group_barrier = false` with an empty roster, as the real adapter reports it.
+local function solo(sim) sim.group_barrier = false; sim.barrier_roster = {} end
+
+local function wait_claims(r, s)
+  local claims = {}
+  local function look(where, text)
+    for _, pat in ipairs({ 'Waiting for the group', 'Waiting for a group', 'Barrier released', 'Barrier TIMEOUT' }) do
+      if text:find(pat, 1, true) then claims[#claims + 1] = where .. ': ' .. text end
+    end
+  end
+  look('message', tostring(r.message))
+  for _, line in ipairs(s.logs) do look('log', line) end
+  if r.phase == 'barrier_wait' then claims[#claims + 1] = 'phase barrier_wait' end
+  return claims
+end
+
+local function solo_run_to_end()
+  local rt = route({ wp('wp_001', 0, 0, 0, { radius = 5 }), wp('wp_002', 0, -100, 0, { radius = 5 }),
+    wp('wp_003', 0, -200, 0, { type = 'finish', radius = 5 }) })
+  local s = Sim.new(); solo(s)
+  local r = Core.new(rt, s.io)
+  r:start(1, 1000)
+  r:tick(1100)                                   -- arrives at wp_001
+  s.p = { x = 0, y = -100, z = 0 }; r:tick(1200) -- arrives at wp_002
+  s.p = { x = 0, y = -200, z = 0 }; r:tick(1300) -- arrives at the finish
+  return r, s
+end
+
+test('DL-019 R2: a Solo arrival makes no group-wait claim in the status, message, phase or log, and moves on', function()
+  local r, s = arrive_at_first_waypoint(nil, solo)
+  expect.equal(r.status, 'Running')
+  expect.equal(r.phase, 'nav')
+  expect.equal(s.count('nav'), 1)          -- already heading for wp_002
+  local claims = wait_claims(r, s)
+  expect.equal(#claims, 0, table.concat(claims, ' | '))
+end)
+
+test('DL-019 R2: a whole Solo run to the finish never makes a group-wait claim', function()
+  local r, s = solo_run_to_end()
+  expect.equal(r.status, 'Completed')
+  local claims = wait_claims(r, s)
+  expect.equal(#claims, 0, table.concat(claims, ' | '))
+end)
+
+test('DL-019: Solo still announces REACHED on arrival (the adapter, not the runner, suppresses the chat)', function()
+  local r, s = arrive_at_first_waypoint(nil, solo)
+  expect.equal(s.count('barrier_announce'), 1)
+  expect.equal(s.last('barrier_announce')[1], 'wp_001')
+end)
+
+test('DL-019: Solo at a door waypoint still clears that door\'s stale confirmation before the door phase', function()
+  local rt = route({ wp('wp_001', 0, 0, 0, { type = 'door', door_after = 'continue',
+    door = { id = 77, name = 'd', x = 1, y = 1, z = 1 } }), wp('wp_002', 0, -100, 0, { type = 'finish', radius = 5 }) })
+  local r, s = arrive_at_first_waypoint(rt, function(sim) solo(sim); sim.confirmed[77] = true end)
+  expect.equal(r.phase, 'door')
+  expect.equal(s.confirmed[77], nil)
+  expect.truthy(s.count('clear_door_confirmed') >= 1)
+end)
+
+test('DL-019: Solo keeps the agreed arrival order - tac_before still begins right after arrival', function()
+  local rt = route({ wp('wp_001', 0, 0, 0, { radius = 5, tac_before = 'pause' }),
+    wp('wp_002', 0, -100, 0, { type = 'finish', radius = 5 }) })
+  local r, s = arrive_at_first_waypoint(rt, solo)
+  expect.equal(r.phase, 'tac_before')
+end)
+
+local function door_first_route()
+  return route({ wp('wp_001', 0, 0, 0, { type = 'door', door_after = 'continue',
+    door = { id = 77, name = 'd', x = 1, y = 1, z = 1 } }), wp('wp_002', 0, -100, 0, { type = 'finish', radius = 5 }) })
+end
+
+for _, mode in ipairs({ { 'Solo', solo }, { 'Group', function() end } }) do
+  local label, setup = mode[1], mode[2]
+
+  test('DL-019: ' .. label .. ': combat already active at the arrival tick wins - no arrival, no nav, no door action', function()
+    local s = Sim.new(); setup(s)
+    local r = Core.new(door_first_route(), s.io)
+    r:start(1, 1000)
+    s.combat = true
+    r:tick(1100)
+    expect.equal(r.status, 'Waiting for combat')
+    expect.equal(s.count('barrier_announce'), 0)
+    expect.equal(s.count('nav'), 0)
+    expect.equal(s.count('door'), 0)
+  end)
+
+  test('DL-019: ' .. label .. ': a med break already active at the arrival tick wins - no arrival, no nav, no door action', function()
+    local s = Sim.new(); setup(s)
+    local r = Core.new(door_first_route(), s.io)
+    r:start(1, 1000)
+    s.medbreak = true
+    r:tick(1100)
+    expect.equal(r.status, 'Waiting for med break')
+    expect.equal(s.count('barrier_announce'), 0)
+    expect.equal(s.count('nav'), 0)
+    expect.equal(s.count('door'), 0)
+  end)
+
+  test('DL-019: ' .. label .. ': combat starting just after arrival pauses on the next tick with no further movement', function()
+    local r, s, t = arrive_at_first_waypoint(nil, setup)
+    local navs = s.count('nav')
+    s.combat = true
+    r:tick(t + 100)
+    expect.equal(r.status, 'Waiting for combat')
+    expect.equal(s.count('nav'), navs)
+  end)
+
+  test('DL-019: ' .. label .. ': a med break starting just after arrival pauses on the next tick with no further movement', function()
+    local r, s, t = arrive_at_first_waypoint(nil, setup)
+    local navs = s.count('nav')
+    s.medbreak = true
+    r:tick(t + 100)
+    expect.equal(r.status, 'Waiting for med break')
+    expect.equal(s.count('nav'), navs)
+  end)
+end
+
+test('DL-019 R3: Group mode keeps its exact wait wording - status, phase and the "Waiting for the group" line', function()
+  local r, s = arrive_at_first_waypoint(nil, function(sim) sim.barrier_roster = { 'Bob' } end)
+  expect.equal(r.status, 'Running')
+  expect.equal(r.phase, 'barrier_wait')
+  expect.equal(r.message, 'Waiting for the group at wp_001 (wp_001)')
+  expect.truthy(has_log(s, 'Running: Waiting for the group at wp_001 (wp_001)'))
+end)
+
+test('DL-019 R3: Group mode with nobody else present still logs the same wait and release lines', function()
+  local r, s = arrive_at_first_waypoint(nil)
+  expect.truthy(has_log(s, 'Running: Waiting for the group at wp_001 (wp_001)'))
+  expect.truthy(has_log(s, 'Barrier released wp_001: expected [], seen []'))
+end)

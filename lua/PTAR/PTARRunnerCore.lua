@@ -333,6 +333,15 @@ function M.new(route,io,opts)
   local function arrive(now)
     local w=waypoints[self.index]
     io.barrier_announce(w.id)
+    -- Solo mode (DL-019): no group barrier applies, so there is nothing to wait for and nothing to say about
+    -- waiting. Do exactly what a released barrier does next, in this same call -- the combat/med-break checks at the
+    -- top of tick() have already run for this arrival, and run again on the next tick -- without ever entering
+    -- barrier_wait or claiming a group wait in the status or the log.
+    if not io.group_barrier() then
+      if w.type=='door' then io.clear_door_confirmed(w.door.id) end
+      after_barrier(now)
+      return
+    end
     self.phase='barrier_wait'; self.barrier_started=now
     say('Running','Waiting for the group at '..w.label..' ('..w.id..')')
     check_barrier(now)
