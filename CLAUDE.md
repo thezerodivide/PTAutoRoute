@@ -57,6 +57,24 @@ If new evidence contradicts the current design, stop and explain the conflict be
 
 **Stop conditions (§12).** Stop incremental patching and re-baseline against the spec if: implemented behavior turns out to differ from what was agreed; it's unclear whether something is a requirement or an implementation choice; an earlier agreement had to be quoted back because it was misremembered; tests pass but live behavior keeps contradicting expectations; logs can't explain observed behavior; several consecutive builds are fixes for the previous fix; or the implementation has become more complicated than the problem warrants.
 
+## Before building (added 2026-10-02, developer-approved; evidence: lessons L-032, L-034)
+
+Added because the protocol's "implementation choice" has no operational test and I kept treating "the approved text doesn't say" as "free to decide", then disclosing afterwards. The protocol itself is unchanged; amending it is the developer's call at a retrospective.
+
+**1. Deviation check.** Every design proposal and every build handoff ends with this block, even when the answer is "none":
+- **Built exactly as approved:** yes / no.
+- **Additions** not in the approved text.
+- **Conflicts** between approved items.
+- **Places I had to choose.**
+
+Any entry other than "none" means stop and ask the developer *before* building. Telling them afterwards is not compliance (Protocol §12: stop and re-baseline when I realize I built something different from what was agreed). A handoff without the block is a failure the developer can call out.
+
+**2. What counts as an implementation choice.** Only something that is invisible to the user's behavior and appearance **and** that the spec does not address. Anything visible (layout, labels, sizes, positions, defaults, what a control does in an edge state) is a design choice and the developer's, however small. If I have a starting value, I propose it and flag it as tunable; I do not decide it silently. Unfamiliar API worries, snags and conflicts between approved items are questions to raise, not choices to make.
+
+**3. Source label on every decision-log entry.** Each decision, change or requirement is labeled exactly one of: **developer-directed** (date), **Claude-proposed, developer-approved** (date), or **Claude-decided, OPEN**. Never put a "developer direction" or "confirmed" header over mixed content. A developer reaction to a whole build ("Perfect") approves what was shown and raised, not choices I never raised. If something was my oversight, the log says so.
+
+**4. Sweep after every build or confirmation.** Refresh the affected DL entry's Status line (build, test count, live vs local), the ledger (Pending Live Verification, Up next), inline markers on any requirement the developer changed, and any stated live confirmation. `CLAUDE.md`'s module/phase/status lists too when code structure changes.
+
 ## Architecture
 
 ### Module layout (`lua/PTAR/`)
