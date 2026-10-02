@@ -1,10 +1,11 @@
 local M={}
 local function safe(s) return tostring(s or 'unknown'):gsub('[^%w_%-]','_') end
-function M.new(dir,identity,clock,version,echo_fn)
+-- `prefix` names the file (default 'PTAR'); the Editor passes 'PTAR_Editor' so it never shares a file with the Runner.
+function M.new(dir,identity,clock,version,echo_fn,prefix)
   local self={echo=false}
   function self:filename()
     local server,char=identity()
-    return 'PTAR_'..safe(server)..'_'..safe(char)..'.log'
+    return (prefix or 'PTAR')..'_'..safe(server)..'_'..safe(char)..'.log'
   end
   function self:path() return dir..'/'..self:filename() end
   function self:write(level,message)

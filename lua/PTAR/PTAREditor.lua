@@ -611,6 +611,41 @@ local function draw()
   imgui.End()
 end
 refresh_routes()
+
+-- DL-022: the Editor's own log file (PTAR_Editor_<server>_<character>.log), and the link to the Runner on this character.
+-- The link asks the Runner, over a named actor mailbox scoped to this server and character, whether a route is in use.
+-- At startup it sends one probe check and only logs the outcome, so the link can be verified before deletion relies on it.
+local actors=require('actors')
+local logger=require('PTAR.PTARLog')
+local runner_link=require('PTAR.PTARRunnerLink')
+local function identity()
+  local function read(fn) local ok,v=pcall(fn); return ok and v or 'unknown' end
+  return read(function() return mq.TLO.EverQuest.Server() end),read(function() return mq.TLO.Me.Name() end)
+end
+local diag=logger.new(paths.logs,identity,mq.gettime,version.VERSION,function(m) mq.print(m) end,'PTAR_Editor')
+local function log(text) diag:event(text) end
+local tracker=runner_link.tracker(mq.gettime)
+-- Ask the Runner whether `file` is in use; `on_result` receives the outcome (reply, no_runner or refuse) exactly once.
+local function runner_check(file,on_result)
+  local server,character=identity()
+  local sent=tracker:send(function(result)
+    local detail=result.kind=='reply' and ((result.busy and 'BUSY' or 'OK')..' (Runner status '..tostring(result.status)..')')
+      or (result.kind=='no_runner' and 'no Runner found (RoutingFailed)') or ('refused: '..tostring(result.reason))
+    log('Runner link: check '..tostring(file)..' result: '..detail..'; status code '..tostring(result.code)..'; elapsed '
+      ..tostring(result.elapsed)..' ms')
+    on_result(result)
+  end)
+  if not sent then log('Runner link: check '..tostring(file)..' not sent: another check is still waiting'); return false end
+  log('Runner link: check '..tostring(file)..' sent (server '..tostring(server)..', character '..tostring(character)..')')
+  actors.send(runner_link.header(server,character),{id='check',file=file},function(status,reply)
+    local ok,content=pcall(function() return reply and reply.content end)
+    tracker:receive(status,ok and content or nil,actors.ResponseStatus)
+  end)
+  return true
+end
+log('Editor session started (build '..version.VERSION..'); log '..diag:path())
+runner_check('(startup probe)',function() end)
+
 mq.imgui.init('PTAREditor',draw)
-while running do mq.delay(100) end
+while running do tracker:tick(); mq.delay(100) end
 mq.imgui.destroy('PTAREditor')

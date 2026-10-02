@@ -714,6 +714,29 @@ diag:set_echo(echo_default,snapshot)
 refresh_routes()   -- DL-021: the zone watcher below picks and loads the zone's default once the zone is known
 log('AutoRoute session started (build '..version.VERSION..', view '..view..'); log '..diag:path())
 mq.imgui.init('PTAutoRoute',draw)
+-- DL-022: the Editor asks this Runner, over a named actor mailbox, whether a route is in use and tells it to refresh the
+-- route list. Both requests are answered and logged. A refresh never uses the active-run guard: it only re-scans the
+-- route files and re-applies the current zone with the existing safe rules (which defer while a run is active).
+local actors=require('actors')
+local runner_link=require('PTAR.PTARRunnerLink')
+local link_box=actors.register(runner_link.MAILBOX,function(message)
+  local request=message.content
+  if type(request)~='table' then log('Runner link: ignored a message with no content'); return end
+  if request.id=='check' then
+    local status=runner and runner.status or nil
+    local reply=runner_link.check_reply(request.file,loaded_file,status)
+    log('Runner link: check '..tostring(request.file)..' -> '..(reply.busy and 'BUSY' or 'OK')..' (runner '..(status or 'none')
+      ..', loaded '..(loaded_file or 'none')..')')
+    message:reply(reply)
+  elseif request.id=='refresh' then
+    log('Runner link: refresh requested')
+    refresh_routes(); apply_zone()
+    message:reply({id='refresh',ok=true})
+  else
+    log('Runner link: ignored unknown message id '..tostring(request.id))
+  end
+end)
+if not link_box then log('Runner link: could not register the mailbox '..runner_link.MAILBOX) end
 local next_snapshot=0
 local next_heartbeat=0
 while running do
