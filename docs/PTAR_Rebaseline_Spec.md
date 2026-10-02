@@ -7,7 +7,7 @@
 | | |
 |---|---|
 | **Document status** | Reviewed and resolved section-by-section — approved as current source of truth |
-| **Implementation status** | v1.0. All 5 concrete fixes from Section 21 and the Section 20 UI redesign are implemented and live-verified; see [decision_log.md](decision_log.md) and [project_ledger.md](project_ledger.md) for the full record |
+| **Implementation status** | v1.1.0. The v1.0 fixes (Section 21) and the UI redesign are implemented and live-verified, and v1.1.0 adds the features in Section 22 (Solo/Group modes, TAC Med Break pause, compact window, zone-filtered route selection, route deletion). Solo mode is live-verified; Group mode is beta and its group-only behavior is not fully live-tested (see Section 22). See [decision_log.md](decision_log.md) and [project_ledger.md](project_ledger.md) for the full record |
 | **Source of truth** | This document after review/approval |
 
 ---
@@ -137,18 +137,18 @@ Terminal statuses are distinct and not interchangeable:
 
 ## 11. User Interface
 
-> **Known limitation, deferred:** The current UI layout, for both the Runner and Editor windows, is not considered satisfactory. A redesign is planned as a future revision and is explicitly out of scope for this document.
+> **UI redesign — done ([DL-015](decision_log.md#dl-015--ui-redesign-review-functional-parity-check-against-pre-redesign-baseline-retrofit-entry)).** The earlier note that the Runner and Editor layouts were unsatisfactory and awaiting a redesign is resolved; the redesign shipped in v1.0.
 
 Runner window (PTAR.lua):
 
-- Route selector, Refresh Routes, New/Edit Route (launches the Editor as a separate Lua process), console-echo toggle (see Section 12), notice text.
+- Route selector (listing only routes for the current zone, Section 22), Refresh Routes, New/Edit Route (launches the Editor as a separate Lua process), console-echo toggle (see Section 12), notice text, the Solo/Group mode buttons and the Compact/Full Mode buttons (Section 22).
 - Route selector and Refresh Routes are guarded against Running/Recovering/Waiting for combat, since they would swap the underlying route data out from under an active run.
 - Start, Pause, Resume, Stop are not guarded against active status by design — they only command state, they never replace route data, so mid-run use is safe except for the traversal-phase case covered in Section 8.
 - Status line, wrapped message text, Current waypoint, Start-waypoint selector.
 
 Editor window (PTAREditor.lua):
 
-- New/load/add-existing route, Action selector (Add Waypoint, Capture Door, Add Finish, three traverse presets, plus Insert Before/After variants), capture fields, full route order list with per-waypoint edit, inline validation.
+- New/load/add-existing route, Delete Route with a confirmation popup (Section 22), Action selector (Add Waypoint, Capture Door, Add Finish, three traverse presets, plus Insert Before/After variants), capture fields, full route order list with per-waypoint edit, inline validation.
 
 > **Editor/Runner independence — confirmed safe, intentional:** The Editor and Runner are independent processes with no cross-process awareness; the Runner holds its own in-memory copy of a route once loaded. Editing and saving a route file in the Editor while the Runner is actively using it does not corrupt or silently desync anything, because the Runner only reloads on an explicit, already-guarded user action. This allows deliberately deferring a reload until edits are finished — not a risk, a supported working pattern.
 
@@ -158,6 +158,7 @@ Editor window (PTAREditor.lua):
 
 > **MQ-console echo — new feature, not present in current code:** A new, separate toggle controls only whether DEBUG-level lines are also echoed to the in-game MQ console; file logging is unaffected by its state either way. The toggle is always present in the UI, in every build type. Its default state differs by build: on by default in test builds, off by default in release/release-candidate builds. Once a user has set an explicit preference, the persisted value always wins over the build default on subsequent launches (see Section 13).
 
+- The Editor writes its own log, `PTAR_Editor_<server>_<character>.log`, in the same folder as the Runner's (DL-022); it records route deletions.
 - Every log line must include the running build's version number. This depends on the single-authoritative-version-value fix in Section 14 — the two are one combined piece of work, not separable.
 
 > **Diagnostic standard:** Inherited directly from Development Protocol Section 8: could another developer, who has never seen this project, read the log and determine what happened, why, when, and where the evidence ends? No PTAR-specific restatement needed.
@@ -166,7 +167,7 @@ Editor window (PTAREditor.lua):
 
 ## 13. Persistence and Session Behavior
 
-- Last-used route persists across relaunches, per server/character.
+- **The route last started in each zone persists across relaunches, per server/character** (v1.1.0, [DL-021](decision_log.md#dl-021--zone-filtering-for-routes-the-run-selector-offers-only-routes-that-start-in-the-current-zone)). This replaces the single "last-used route" of v1.0, which is ignored if an old settings file still holds it. The Solo/Group mode, the Full/Compact view, and the one-time mode notice also persist per server/character.
 
 > **Provisional caveat, linked to Section 5:** Once route trees exist (a Finish that loads a different route), persistence should resolve to the root of the tree rather than the specific sub-route last active, so relaunching mid-chain doesn't strand the user on a route that no longer makes sense in isolation. Depends on the same not-yet-designed chaining feature as Section 5's provisional ending-rule note.
 
@@ -194,9 +195,9 @@ Editor window (PTAREditor.lua):
 
 ## 16. Implementation State Machine
 
-Phases (13, source-confirmed): nav, backtrack, combat, door, door_zone, traverse_facing, traverse_approach, traverse_falling, water_facing, water_descend, water_cross, water_ascend, ground_exit.
+Phases (18, source-confirmed): nav, backtrack, combat, medbreak, door, door_zone, barrier_wait, tac_before, tac_after, tac_assert, traverse_facing, traverse_approach, traverse_falling, water_facing, water_descend, water_cross, water_ascend, ground_exit.
 
-Statuses (8): Ready, Running, Recovering, Waiting for combat, Paused, Error, Manual handoff, Completed.
+Statuses (9): Ready, Running, Recovering, Waiting for combat, Waiting for med break, Paused, Error, Manual handoff, Completed.
 
 > **Guard requirement tied to Section 8:** Start and Resume must check the current phase (not just status) and refuse if phase is any of the seven traverse/water_* phases. This is a different check from the existing route-swap guard, which checks status. Pause remains fully unguarded and unaffected at every phase.
 
@@ -239,3 +240,39 @@ All five items originally listed here are implemented and live-verified as of v1
 - Persist last-used route and MQ-console-echo preference per server/character (Section 13) — [DL-003](decision_log.md#dl-003--persist-last-used-route-and-mq-console-echo-preference-per-servercharacter).
 - Rename the PTAutorunner folder to PTAR (Section 14) — [DL-004](decision_log.md#dl-004--rename-the-ptautorunner-folder).
 - Remove the route/log file relocation-on-launch behavior before release (Section 3) — [DL-005](decision_log.md#dl-005--remove-routelog-file-relocation-on-launch-behavior-before-release).
+
+## 22. Additions in v1.1.0
+
+Each item below records the agreed behavior at requirement level; the decision log entry named in each heading holds the reasoning, the evidence and the supersessions.
+
+### 22.1 Solo and Group modes — [DL-017](decision_log.md#dl-017--solo-and-group-modes-a-per-character-setting-that-silences-group-coordination-entirely-in-solo), [DL-019](decision_log.md#dl-019--solo-mode-makes-no-group-wait-claim-the-runner-skips-the-barrier-when-no-group-barrier-applies)
+
+- A per-character mode, **Solo** (default) or **Group (Beta)**, switched from the Runner's Full view only while no route is Running, Recovering, Waiting for combat or Waiting for med break.
+- In Solo PTAR sends no group chat of any kind (heartbeat, waypoint-reached, door-open, med-break announcements), treats itself as the only instance, and never waits at a barrier; neither the status nor the log may claim it is waiting for a group.
+- Group-only settings (Door Opening Role) are hidden in Solo and kept for when the user switches back. Group-mode wording and behavior are unchanged from v1.0.
+- A one-time modal notice states that Group mode is in beta; it is shown once per computer for each major.minor release version (acknowledgment kept in `config\PTAR\PTAR_Notice.txt`), until Group is out of beta ([DL-023](decision_log.md#dl-023--the-group-beta-notice-is-acknowledged-once-per-computer-per-majorminor-version-not-once-per-character), supersedes DL-017 item 9 on scope).
+
+### 22.2 TAC Med Break — [DL-016](decision_log.md#dl-016--pause-ptar-during-tac-med-breaks-defer-waypointdoor-barrier-timers-for-the-group), [DL-020](decision_log.md#dl-020--resume-gate-clearing-combat-or-a-med-break-never-resumes-movement-while-the-other-is-still-active)
+
+- PTAR detects TAC's Med Break from TAC's console messages, pauses while it is active (status Waiting for med break), and resumes toward the same waypoint when it ends. If TAC's end message is missed, a character that is no longer sitting or ducking counts as the end. Switching TAC's own mode mid-break is an accepted, unobservable gap.
+- In Group mode a groupmate's break defers the waypoint wait and extends its timeout by the paused time.
+- Clearing one interruption (combat or med break) never resumes movement or a door action while the other is still active; the status shows the one still waiting.
+
+### 22.3 Compact window — [DL-018](decision_log.md#dl-018--compact-window-mode-a-three-row-view-for-monitoring-and-operating-ptar-in-less-screen-space)
+
+- A Compact view (Route, Status, Start / Pause-Resume / Stop / Full Mode) and a Full view, switched with the Compact and Full Mode buttons; the chosen view persists. Compact Start always starts at the nearest valid waypoint; its single Pause/Resume button is a toggle. Compact is deliberately quiet (no messages or block explanations). The Full window size is restored when returning to Full; the Compact width is remembered within a session.
+
+### 22.4 Zone-filtered route selection — [DL-021](decision_log.md#dl-021--zone-filtering-for-routes-the-run-selector-offers-only-routes-that-start-in-the-current-zone)
+
+- The Runner lists only routes whose stored starting zone is the current zone, sorted by route name (case-insensitive, then file name). The default is the route last started in that zone if still valid, else the first valid route alphabetically; with none, the selector reads "No routes available for this zone" and Start is unavailable. A route is remembered for its zone when a run actually executes (first navigation, door click or traversal movement).
+- Full view also lists invalid or still-being-captured routes for the zone, greyed and marked `[INVALID]`, which refuse selection with the reason; Compact lists valid routes only. Routes whose zone cannot be read never appear in the Runner.
+- On a zone change: a Ready or absent runner loads the new default; Completed, Error, Manual handoff and Paused runners are preserved and the new default is shown pending (loaded on select or Start); an active run defers; returning to the loaded route's own zone restores it.
+
+### 22.5 Route deletion — [DL-022](decision_log.md#dl-022--delete-a-route-from-the-editor)
+
+- The Editor can delete the selected route after a confirmation popup. The index entry is removed first, then the route file and its `.bak` and `.tmp`; failures and partial failures are reported, never shown as success. Deletion never touches a Runner: a loaded runner keeps its in-memory route, and the Runner's list updates on Refresh Routes. Supersedes the originally proposed in-use restriction and automatic Runner refresh.
+
+### 22.6 Verification state at v1.1.0
+
+Live-verified: Solo mode and the first-run notice, the TAC Med Break pause and resume (including the end-of-break fallback), combat/med-break hold in Solo, the compact view, the zone-filtered selector with its pending, restore, no-routes and invalid-entry behavior, per-zone remembering, and route deletion (cancel, confirm, loaded-route unload, success message). **Not live-tested:** Group mode's group-only behavior (four items: the multi-character barrier deferral during a groupmate's med break, a med break during a barrier wait, Group mode's chat actually being sent on this build, and the Group barrier hold when combat and a med break overlap); the zone-update deferral branch (unit-tested only); and the delete failure messages (covered by real-failure tests, not exercised in the game).
+

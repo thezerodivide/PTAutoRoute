@@ -7,6 +7,7 @@ The [README](../README.md) covers enough to capture and run a basic route. This 
 - **Existing route** — a dropdown of every route file registered in `config/PTAR/PTAR_Routes.txt`. This is not the same as "every route file on disk" — see Register Route File below.
 - **Load Route** — loads the route selected in the dropdown. Refused while a route is loaded and unsaved (fix or save it first), or while a traversal capture is in progress.
 - **Refresh Routes** — re-scans the config folder and rebuilds the dropdown list.
+- **Delete Route** — deletes the route selected in the dropdown, after you confirm in a popup titled **Delete Route** (it shows `File Name: <filename>` with **Confirm Delete** and **Cancel**; Cancel, or closing the Editor, changes nothing). The route's entry in `PTAR_Routes.txt` is removed first, then the route file and its `.bak` and `.tmp` copies. On success the Editor says `Delete confirmed: <filename> has been deleted. Refresh Routes in the Runner to update its list.`, refreshes its own list, and — if that route was the one open in the Editor — unloads it, dropping any unsaved edits. If the list can't be updated, nothing is deleted; if the route file itself can't be deleted, the route has already left the list and the Editor tells you to use **Register Route File** to bring it back; if a `.bak` or `.tmp` can't be removed, the Editor names it so you can delete it by hand. A delete can't be undone. It never affects a Runner that already has the route loaded: that Runner keeps running it from memory until it loads something else or PTAR restarts. The Existing route dropdown lists every registered route regardless of zone.
 - **New Route...** — expands a filename/name/description form and a **Create Route** button. The filename gets a `PTAR_` prefix automatically if you don't include one.
 - **Register Route File...** — for a route file that already exists in `config/PTAR/` (copied in by hand, or shared by someone else) but doesn't show up in the Existing route dropdown. Registering adds it to the index without touching its contents.
 
@@ -106,11 +107,27 @@ Errors (missing required fields, an invalid radius, a malformed traversal, a dup
 
 ## Runner — every option
 
-- **Route** — pick any registered route. Switching routes, or refreshing the list, is refused while Running, Recovering, or Waiting for combat — pause or stop first.
-- **Selected waypoint** — the specific waypoint used when the start method is "At Selected Waypoint."
-- **Start method** — At Selected Waypoint, At Beginning Waypoint, or At Nearest Valid Waypoint. Chosen once, then applied by clicking Start.
-- **Start / Pause / Resume at nearest valid / Stop** — see the README for what each does. Start and Resume are the only two ever gated by a busy state (mid-traversal or mid-TAC-command); Pause and Stop are never blocked.
-- **Door Opening Role** — Primary or Secondary. See the README's multi-character section; exactly one Primary per group.
+### Window and mode
+
+- **Mode: Solo / Group (Beta)** — Solo (the default) sends no group chat and never waits for anyone; Group (Beta) coordinates doors and waypoint waits across a group. The selected button is highlighted. Switching is refused while a route is Running, Recovering, Waiting for combat or Waiting for med break (the buttons grey out and say "Pause or Stop to switch modes."). The setting is per character. A one-time notice about Group being in beta appears the first time PTAR runs.
+- **Compact / Full Mode** — **Compact** (top right of the Mode row) switches to a small window with the Route dropdown, the status, and Start / Pause-Resume / Stop; **Full Mode** switches back. Compact shows no Mode buttons, settings, waypoint controls, messages or notices — switch to Full to see why something is greyed out. PTAR remembers the last view between sessions, restores your Full window size when you return to it, and remembers the Compact width within a session.
+
+### Route list
+
+- **Route** — lists only the routes that start in the zone you're in (the route's stored zone), sorted by route name (ignoring case), then file name. The route shown when you arrive is the one you last started in this zone if it's still available, otherwise the first valid route alphabetically. With none, it reads `No routes available for this zone` and Start is unavailable.
+- **Invalid routes** — in Full mode, a route for this zone that can't be run (invalid, or still being captured with no Finish or Manual handoff) is listed greyed as `[INVALID] <name> [<zone>] — <file>`. Clicking one doesn't select it or change the loaded route; the notice line explains why. Routes whose zone can't be read at all never appear in the Runner (they still appear in the Editor, and each scan logs them). Compact mode lists only valid routes.
+- **Switching routes** — selecting a route loads it. Selecting is refused while Running, Recovering or Waiting for combat — pause or stop first.
+- **Refresh Routes** — re-scans the route files and re-applies the current zone: with no run in progress it loads this zone's default route, which replaces a route you had only selected and not started. Refused while Running, Recovering or Waiting for combat.
+- **Last route per zone** — a route is remembered for its starting zone the first time a run actually starts moving (a navigation command, a door click, or traversal movement); failed start attempts, loading and selecting never change it. The old single "last route" setting is no longer used.
+- **After you change zones** — PTAR watches your zone. With no runner, or a Ready one, it loads the new zone's default. After a Completed, Error, Manual handoff or Paused run, the old status and message stay, the dropdown shows the new zone's default, the Selected waypoint dropdown is disabled and says `Waypoints load when you select or Start this route.`, and **Resume at nearest valid** (and Compact's Pause/Resume) is disabled; selecting the route, or pressing Start, loads it (Start then starts it). Zone back to the loaded route's own zone and it returns with everything enabled. A run that is still going when you zone ends with a "Zone changed" error, or completes if you zoned through its finish door.
+
+### Controls
+
+- **Selected waypoint** — the waypoint used when the start method is "At Selected Waypoint." Until the displayed route has loaded, "At Selected Waypoint" starts at its first waypoint.
+- **Start method** — At Selected Waypoint, At Beginning Waypoint, or At Nearest Valid Waypoint. Chosen once, then applied by clicking Start. In Compact, Start always starts at the nearest valid waypoint.
+- **Start / Pause / Resume at nearest valid / Stop** — see the README for what each does. Start and Resume are the only two ever gated by a busy state (mid-traversal or mid-TAC-command); Pause and Stop are never blocked. In Compact, one **Pause/Resume** button reads "Pause" while a route is Running, Recovering, Waiting for combat or Waiting for med break, "Resume" while Paused, and is greyed in every other status.
+- **Statuses** — Ready, Running, Recovering, Waiting for combat, Waiting for med break, Paused, Error, Manual handoff, Completed. While TAC is on a Med Break, PTAR shows Waiting for med break and does nothing until the break ends; combat and a med break never both let PTAR move.
+- **Door Opening Role** — Primary or Secondary; shown only in Group mode (Solo shows two grey lines instead). See the README's Solo and Group Modes section; exactly one Primary per group. Your Group settings are kept while you're in Solo.
 - **Console debug** — mirrors log detail to the in-game console. Does not affect what's written to the log file.
 
-Every setting (last-used route, Console debug, Door Opening Role) persists per server/character and reloads automatically next time.
+Every setting (mode, view, Console debug, Door Opening Role, and the last route started in each zone) persists per server/character and reloads automatically next time.
