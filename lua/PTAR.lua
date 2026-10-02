@@ -362,10 +362,15 @@ local function draw()
     local mode_busy=runner and (runner.status=='Running' or runner.status=='Recovering' or
       runner.status=='Waiting for combat' or runner.status=='Waiting for med break')
     if mode_busy then imgui.BeginDisabled() end
-    if imgui.Button('Solo') and mode~='solo' then mode='solo'; log('Mode set to solo'); save_settings() end
-    imgui.SameLine(); if imgui.Button('Group') and mode~='group' then mode='group'; log('Mode set to group'); save_settings() end
+    local function mode_button(label,value)
+      local selected=(mode==value)
+      if selected then imgui.PushStyleColor(ImGuiCol.Button,0.2,0.55,0.25,1) end
+      local clicked=imgui.Button(label)
+      if selected then imgui.PopStyleColor() end
+      if clicked and not selected then mode=value; log('Mode set to '..value); save_settings() end
+    end
+    mode_button('Solo','solo'); imgui.SameLine(); mode_button('Group','group')
     if mode_busy then imgui.EndDisabled() end
-    imgui.SameLine(); imgui.Text('('..(mode=='solo' and 'Solo' or 'Group')..' selected)')
     if mode_busy then imgui.TextColored(1,0.8,0.2,1,'Pause or Stop to switch modes.') end
     imgui.AlignTextToFramePadding(); imgui.Text('Route'); imgui.SameLine()
     local display=filename or '(no routes found)'
