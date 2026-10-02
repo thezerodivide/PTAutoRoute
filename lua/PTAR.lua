@@ -441,16 +441,20 @@ local function route_selector(compact)
   if imgui.BeginCombo('##runner_route',display) then
     for _,entry in ipairs(offered) do
       if entry.valid then
-        if imgui.Selectable(entry.label..'##'..entry.file,filename==entry.file) then
+        -- MQ's binding returns (selected, pressed) (lua_ImGuiWidgets.cpp): the first value is the selection state, true
+        -- every frame for the selected row, so only `pressed` is a click. Reading the first value reloaded the
+        -- displayed route on every frame the dropdown was open (found live 2026-10-02, 53 loads in 1.6 s).
+        local _,pressed=imgui.Selectable(entry.label..'##'..entry.file,filename==entry.file)
+        if pressed then
           if runner and (runner.status=='Running' or runner.status=='Recovering' or runner.status=='Waiting for combat') then
             notice='Pause or Stop before changing routes.'
           else filename=entry.file; load_route() end
         end
       else
         imgui.PushStyleColor(ImGuiCol.Text,0.6,0.6,0.6,1)
-        local clicked=imgui.Selectable(entry.label..'##'..entry.file,false)
+        local _,pressed=imgui.Selectable(entry.label..'##'..entry.file,false)
         imgui.PopStyleColor()
-        if clicked then
+        if pressed then
           notice='Unable to select route - Route invalid: '..entry.reason
           log('Route selection refused: '..entry.file..' is invalid: '..entry.reason)
         end
