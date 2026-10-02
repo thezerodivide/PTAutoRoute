@@ -452,6 +452,14 @@ function M.new(route,io,opts)
       end
       if now-self.combat_clear_at<2000 then return end
       local returning=self.combat_return
+      -- DL-020: combat clearing must not resume movement or a door action while my own med break is still active;
+      -- hand the same return phase to the med break, which resumes it when the break ends.
+      if io.medbreak() then
+        self.combat_clear_at=nil; self.combat_return=nil
+        self.phase='medbreak'; self.medbreak_return=returning; self.medbreak_paused_at=now
+        say('Waiting for med break','Combat cleared during a med break; holding at '..w.label..' until it ends.')
+        return
+      end
       self.combat_clear_at=nil; self.combat_return=nil
       io.log('Combat clear for 2000 ms; resuming '..returning..' toward '..w.label)
       if returning=='backtrack' then
@@ -497,16 +505,30 @@ function M.new(route,io,opts)
     if self.phase=='medbreak' then
       local returning=self.medbreak_return
       if returning=='barrier_wait' then
-        if io.medbreak_group_active() then return end
+        -- DL-020: hold while my OWN med break is active too, not only a groupmate's; before this, an own break that
+        -- interrupted a barrier wait flip-flopped every tick and could release the barrier mid-break.
+        if io.medbreak_group_active() or io.medbreak() then return end
         local paused=now-self.medbreak_paused_at
         self.medbreak_paused_at=nil; self.medbreak_return=nil
         self.barrier_started=self.barrier_started+paused
+        -- DL-020: the med break ending must not resume anything while combat is still active.
+        if io.combat() then
+          self.phase='combat'; self.combat_return='barrier_wait'; self.combat_clear_at=nil
+          say('Waiting for combat','Med break ended during combat; holding at '..w.label..' until combat clears.')
+          return
+        end
         io.log(string.format('Group med break clear; resuming barrier wait at %s (deadline extended by %d ms)',w.label,paused))
         self.phase='barrier_wait'; check_barrier(now)
         return
       end
       if io.medbreak() then return end
       self.medbreak_paused_at=nil; self.medbreak_return=nil
+      -- DL-020: the med break ending must not resume anything while combat is still active.
+      if io.combat() then
+        self.phase='combat'; self.combat_return=returning; self.combat_clear_at=nil
+        say('Waiting for combat','Med break ended during combat; holding at '..w.label..' until combat clears.')
+        return
+      end
       io.log('Med break clear; resuming '..returning..' toward '..w.label)
       if returning=='backtrack' then
         local back=waypoints[self.last_good]

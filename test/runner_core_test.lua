@@ -1211,3 +1211,99 @@ test('DL-019 R3: Group mode with nobody else present still logs the same wait an
   expect.truthy(has_log(s, 'Running: Waiting for the group at wp_001 (wp_001)'))
   expect.truthy(has_log(s, 'Barrier released wp_001: expected [], seen []'))
 end)
+
+-- ================================================================ DL-020 (resume gate: combat and med break)
+-- Requirement (developer, 2026-10-02): clearing one interruption (combat or my own med break) must never resume
+-- movement or a door action while the other is still active, in Solo or Group. When combat clears while a med
+-- break is active the status is "Waiting for med break"; when the med break clears while combat is active it is
+-- "Waiting for combat". Everything else about combat and med-break pausing is unchanged.
+-- One test per resume path; each runs two INDEPENDENT scenarios (each from a fresh runner) and reports both:
+--   A: combat clears while a med break is active.   B: the med break clears while combat is active.
+local function backtrack_state(setup)
+  local rt = route({ wp('wp_001', 0, -100, 0, { radius = 5 }), wp('wp_002', 0, -200, 0, { radius = 5 }),
+    wp('wp_003', 0, -300, 0, { type = 'finish', radius = 5 }) })
+  local s = Sim.new(); setup(s)
+  local r = Core.new(rt, s.io)
+  r:start(1, 1000)
+  s.p = { x = 0, y = -100, z = 0 }; r:tick(1100)
+  s.p = { x = 0, y = -200, z = 0 }
+  local t = tick_until(r, 1100, 10000, function() return r.phase == 'nav' and r.index == 3 end)
+  s.nav_active = false
+  t = tick_until(r, t, 60000, function() return r.phase == 'backtrack' end)
+  s.nav_active = true
+  s.p = { x = 0, y = -250, z = 0 }   -- away from the last good waypoint, so resuming must issue a /nav back to it
+  return r, s, t
+end
+
+local resume_paths = {
+  nav = { solo_ok = true, make = function(setup)
+    local s = Sim.new(); setup(s)
+    local r = Core.new(far_route(), s.io); r:start(1, 1000)
+    return r, s, 1000
+  end, resumed = function(r, s, base) return s.count('nav') > base.navs end },
+  backtrack = { solo_ok = true, make = backtrack_state,
+    resumed = function(r, s, base) return s.count('nav') > base.navs end },
+  ground_exit = { solo_ok = true, make = function(setup)
+    local r, s, t = to_phase(ground_route(), 'ground_exit'); setup(s); return r, s, t
+  end, resumed = function(r, s, base) return s.count('nav') > base.navs end },
+  door = { solo_ok = true, make = function(setup)
+    return arrive_at_first_waypoint(door_first_route(), setup)
+  end, resumed = function(r, s, base) return r.phase == 'door' end },
+  barrier_wait = { solo_ok = false, make = function(setup)
+    return arrive_at_first_waypoint(nil, function(sim) setup(sim); sim.barrier_roster = { 'Bob' } end)
+  end, resumed = function(r, s, base) return s.count('nav') > base.navs end },
+}
+
+local function snapshot_counts(s) return { navs = s.count('nav'), doors = s.count('door') } end
+
+local function check_hold(label, r, s, base, hold_status, failures)
+  local navs, doors = s.count('nav'), s.count('door')
+  if navs ~= base.navs then failures[#failures + 1] = label .. ': /nav issued during the hold (' .. base.navs .. '->' .. navs .. ')' end
+  if doors ~= base.doors then failures[#failures + 1] = label .. ': door action during the hold (' .. base.doors .. '->' .. doors .. ')' end
+  if r.status ~= hold_status then failures[#failures + 1] = label .. ': status is "' .. tostring(r.status) .. '", expected "' .. hold_status .. '"' end
+  -- Developer-approved wording (2026-10-02): both hold messages say the run is holding at the waypoint.
+  if not tostring(r.message):find('holding at', 1, true) then failures[#failures + 1] = label .. ': message is "' .. tostring(r.message) .. '", expected the approved "holding at <waypoint>" wording' end
+end
+
+local function scenario_A(path, setup, failures)   -- combat clears while a med break is active
+  local r, s, t = path.make(setup)
+  s.combat = true; r:tick(t + 100)
+  if r.status ~= 'Waiting for combat' then failures[#failures + 1] = 'A: setup: combat did not pause the run (' .. tostring(r.status) .. ')'; return end
+  local base = snapshot_counts(s)
+  s.medbreak = true; r:tick(t + 200)
+  if s.barrier_roster and s.barrier_roster[1] then s.barrier_seen_map['wp_001'] = { Bob = true } end
+  s.combat = false; r:tick(t + 300); r:tick(t + 2400); r:tick(t + 2500)
+  check_hold('A (combat cleared during med break)', r, s, base, 'Waiting for med break', failures)
+  s.medbreak = false; r:tick(t + 2600); r:tick(t + 2700); r:tick(t + 2800)
+  if not path.resumed(r, s, base) then failures[#failures + 1] = 'A: the run did not resume after the med break also cleared (status ' .. tostring(r.status) .. ', phase ' .. tostring(r.phase) .. ')' end
+end
+
+local function scenario_B(path, setup, failures)   -- the med break clears while combat is active
+  local r, s, t = path.make(setup)
+  s.medbreak = true; r:tick(t + 100)
+  if r.status ~= 'Waiting for med break' then failures[#failures + 1] = 'B: setup: the med break did not pause the run (' .. tostring(r.status) .. ')'; return end
+  local base = snapshot_counts(s)
+  s.combat = true; r:tick(t + 200)
+  if s.barrier_roster and s.barrier_roster[1] then s.barrier_seen_map['wp_001'] = { Bob = true } end
+  s.medbreak = false; r:tick(t + 300); r:tick(t + 400)
+  check_hold('B (med break cleared during combat)', r, s, base, 'Waiting for combat', failures)
+  s.combat = false; r:tick(t + 500); r:tick(t + 2600); r:tick(t + 2700); r:tick(t + 2800)
+  if not path.resumed(r, s, base) then failures[#failures + 1] = 'B: the run did not resume after combat also cleared (status ' .. tostring(r.status) .. ', phase ' .. tostring(r.phase) .. ')' end
+end
+
+for _, name in ipairs({ 'nav', 'backtrack', 'ground_exit', 'door', 'barrier_wait' }) do
+  local path = resume_paths[name]
+  for _, mode in ipairs({ { 'Solo', solo }, { 'Group', function() end } }) do
+    local label, setup = mode[1], mode[2]
+    if label == 'Group' or path.solo_ok then
+      test('DL-020: ' .. label .. ': ' .. name .. ' - clearing combat or a med break never resumes while the other is active', function()
+        local failures = {}
+        for _, sc in ipairs({ { 'A', scenario_A }, { 'B', scenario_B } }) do
+          local ok, err = pcall(sc[2], path, setup, failures)
+          if not ok then failures[#failures + 1] = sc[1] .. ': scenario error: ' .. tostring(err) end
+        end
+        if #failures > 0 then error('\n  ' .. table.concat(failures, '\n  '), 0) end
+      end)
+    end
+  end
+end
