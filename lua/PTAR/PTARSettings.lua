@@ -1,4 +1,4 @@
--- Per-server/character runtime preferences (last-used route, MQ-console echo, multi-box door role, mode, view).
+-- Per-server/character runtime preferences (per-zone remembered routes, MQ-console echo, multi-box door role, mode, view).
 -- Plain key=value text, atomic saves (same tmp/bak/promote pattern as PTARFiles' route index).
 local files=require('PTAR.PTARFiles')
 local M={}
@@ -33,7 +33,7 @@ function M.read(dir,identity)
   end
   settings.zone_routes=zone_routes
   f:close()
-  if settings.last_route and not files.accept(settings.last_route) then settings.last_route=nil end
+  settings.last_route=nil   -- DL-021: the legacy single last_route is ignored; per-zone routes replace it
   if settings.echo_enabled=='true' then settings.echo_enabled=true
   elseif settings.echo_enabled=='false' then settings.echo_enabled=false
   else settings.echo_enabled=nil end
@@ -48,7 +48,6 @@ end
 function M.save(dir,identity,settings)
   local path=M.path(dir,identity)
   local lines={}
-  if settings.last_route then lines[#lines+1]='last_route='..settings.last_route end
   if settings.echo_enabled~=nil then lines[#lines+1]='echo_enabled='..tostring(settings.echo_enabled) end
   if settings.door_role=='primary' or settings.door_role=='secondary' then lines[#lines+1]='door_role='..settings.door_role end
   if settings.mode=='solo' or settings.mode=='group' then lines[#lines+1]='mode='..settings.mode end

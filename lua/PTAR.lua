@@ -4,6 +4,7 @@ local imgui=require('ImGui')
 local data=require('PTAR.PTARRouteData')
 local machine=require('PTAR.PTARRunnerCore')
 local files=require('PTAR.PTARFiles')
+local zone_select=require('PTAR.PTARZoneSelect')
 local logger=require('PTAR.PTARLog')
 local combat=require('PTAR.PTARCombat')
 local path_setup=require('PTAR.PTARPaths')
@@ -24,6 +25,11 @@ local seen_mode_notice=false
 -- exactly as stored, the route a run last executed.
 local loaded_file=nil
 local zone_routes={}
+-- DL-021: the last known good zone, whether the zone reading is currently unavailable (for the one-line log), and
+-- whether a route-list update is waiting for an active run to end.
+local current_zone=nil
+local zone_unavailable=false
+local zone_deferred=false
 -- DL-018: 'full' (default) or 'compact'. full_size remembers the user's full-view window size when they go compact
 -- so Full restores it; apply_size forces the window size for exactly one frame after a view switch.
 local view='full'
@@ -56,7 +62,7 @@ local function log(message)
   diag:event(message)
 end
 local function save_settings()
-  settings_mod.save(paths.config,identity,{last_route=filename,echo_enabled=diag.echo,door_role=door_role,
+  settings_mod.save(paths.config,identity,{echo_enabled=diag.echo,door_role=door_role,
     mode=mode,seen_mode_notice=seen_mode_notice,view=view,zone_routes=zone_routes})
 end
 mq.event('ptar_door_open',"#1# tells the group, '#2#'",function(line,sender,message)
@@ -327,32 +333,56 @@ local function refresh_routes()
   local found,err=files.scan(paths.config)
   if not found then notice='Could not scan config routes: '..tostring(err); log(notice); return end
   choices=found
-  local exists=false
-  for _,entry in ipairs(choices) do if entry.file==filename then exists=true end end
-  if not exists then filename=choices[1] and choices[1].file or nil end
-  log('Route scan: '..#choices..' candidates; selected '..tostring(filename))
+  -- DL-021: an invalid route whose zone cannot be read can never be placed in a zone, so the Runner never lists it;
+  -- say so once per scan. (The Editor still lists it.)
+  for _,entry in ipairs(choices) do
+    if entry.error~=nil and entry.zone==nil then
+      log('Route scan: hiding '..entry.file..' from the Runner list (invalid, zone unknown): '..entry.error)
+    end
+  end
+  log('Route scan: '..#choices..' candidates')
 end
 local function load_route()
   if runner and (runner.status=='Running' or runner.status=='Recovering' or runner.status=='Waiting for combat') then notice='Pause or Stop before loading another route.'; return end
   if not filename or not files.accept(filename) then notice='Select a route from the list.'; return end
-  runner=nil; route=nil
+  runner=nil; route=nil; loaded_file=nil
   local path=paths.config..'/'..filename
   local loaded,err=data.read(path)
   if not loaded then notice='Load failed: '..tostring(err); return end
   local errors=data.validate(loaded)
   if #errors>0 then notice='Route invalid: '..table.concat(errors,'; '); return end
-  local endpoint=false
-  for _,w in ipairs(loaded.waypoints) do
-    if w.type=='finish' or w.manual_handoff or w.door_after=='finish_open' or w.door_after=='finish_zone' then endpoint=true end
-  end
-  if #loaded.waypoints==0 or not endpoint then
-    notice='Route is still being captured; add a Finish or Manual handoff waypoint before running.'; return
+  if not files.has_endpoint(loaded) then
+    notice=zone_select.INCOMPLETE_REASON; return
   end
   route=loaded; runner=machine.new(route,adapter); loaded_file=filename
   notice='Loaded '..route.route_name..' ('..#route.waypoints..' waypoints).\nLog: '..diag:path()
   log('Loaded '..path..' with '..#route.waypoints..' waypoints')
   diag:debug('Route load snapshot: '..snapshot())
   save_settings()
+end
+-- DL-021: apply the current zone to the route list and the runner (see PTARZoneSelect.decide). A run that is still
+-- active defers the update until it ends. Ready or no runner loads the zone's default (its remembered route if still
+-- valid, else the first valid one alphabetically); with no valid route the runner is cleared. Completed, Error,
+-- Manual handoff and Paused keep the old runner: the selector shows the new zone's default (pending) or, when the
+-- character is back in the loaded route's own stored zone, the loaded route again (restore).
+local function apply_zone()
+  if not current_zone then return end
+  local action=zone_select.decide(current_zone,runner and runner.status or nil,route and route.zone_short_name or nil)
+  if action=='defer' then zone_deferred=true; return end
+  zone_deferred=false
+  if action=='restore' then filename=loaded_file; return end
+  local default=zone_select.default_file(choices,current_zone,zone_routes[current_zone])
+  filename=default
+  if action=='pending' then return end
+  if default then load_route()
+  else runner=nil; route=nil; loaded_file=nil end
+end
+-- True when the displayed route is not the one the runner holds (it loads on select or Start).
+local function route_pending() return runner~=nil and loaded_file~=filename end
+-- Load the displayed route if it is not the loaded one; true when the runner now holds the displayed route.
+local function ensure_loaded()
+  if filename and filename~=loaded_file then load_route() end
+  return runner~=nil and filename~=nil and loaded_file==filename
 end
 -- DL-018: right-align the next item. GetWindowWidth is used by other Project Triune scripts; if it is ever
 -- unavailable the item simply follows the previous one on the same line.
@@ -398,14 +428,32 @@ local function route_selector(compact)
     if ok and type(avail)=='number' then width=math.max(COMPACT_ROUTE_MIN_W,math.min(avail,max_w)) end
     imgui.SetNextItemWidth(width)
   end
-  local display=filename or '(no routes found)'
-  for _,entry in ipairs(choices) do if entry.file==filename then display=entry.label end end
+  -- DL-021: only this zone's routes are offered (full view also lists this zone's invalid routes, greyed and
+  -- refusing clicks; compact lists valid routes only).
+  local offered=zone_select.list(choices,current_zone,compact and 'compact' or 'full')
+  local display
+  if filename then
+    display=filename
+    for _,entry in ipairs(choices) do if entry.file==filename then display=entry.label end end
+    for _,entry in ipairs(offered) do if entry.file==filename then display=entry.label end end
+  elseif current_zone then display='No routes available for this zone'
+  else display='(no routes found)' end
   if imgui.BeginCombo('##runner_route',display) then
-    for _,entry in ipairs(choices) do
-      if imgui.Selectable(entry.label..'##'..entry.file,filename==entry.file) then
-        if runner and (runner.status=='Running' or runner.status=='Recovering' or runner.status=='Waiting for combat') then
-          notice='Pause or Stop before changing routes.'
-        else filename=entry.file; load_route() end
+    for _,entry in ipairs(offered) do
+      if entry.valid then
+        if imgui.Selectable(entry.label..'##'..entry.file,filename==entry.file) then
+          if runner and (runner.status=='Running' or runner.status=='Recovering' or runner.status=='Waiting for combat') then
+            notice='Pause or Stop before changing routes.'
+          else filename=entry.file; load_route() end
+        end
+      else
+        imgui.PushStyleColor(ImGuiCol.Text,0.6,0.6,0.6,1)
+        local clicked=imgui.Selectable(entry.label..'##'..entry.file,false)
+        imgui.PopStyleColor()
+        if clicked then
+          notice='Unable to select route - Route invalid: '..entry.reason
+          log('Route selection refused: '..entry.file..' is invalid: '..entry.reason)
+        end
       end
     end
     imgui.EndCombo()
@@ -428,9 +476,11 @@ local function draw_compact_rows()
   if not runner then return end
   imgui.Text('Status: '..runner.status)
   local busy=runner:tac_busy() or runner:traversal_blocking()
-  if busy then imgui.BeginDisabled() end
+  local pending=route_pending()
+  local start_off=busy or filename==nil      -- DL-021: no displayed route (none for this zone) means Start is unavailable
+  if start_off then imgui.BeginDisabled() end
   local start_clicked=imgui.Button('Start')
-  if busy then imgui.EndDisabled() end
+  if start_off then imgui.EndDisabled() end
   -- Frame padding is learned from the Start button (its width minus its text), then used to give Pause/Resume
   -- the width of its longest label whichever label it shows.
   if not compact_pr_w then
@@ -444,7 +494,7 @@ local function draw_compact_rows()
   imgui.SameLine()
   local pr=runner:pause_resume_state()
   local pr_labels={pause='Pause',resume='Resume',disabled='Pause/Resume'}
-  local pr_off=(pr=='disabled') or (pr=='resume' and busy)
+  local pr_off=(pr=='disabled') or (pr=='resume' and (busy or pending))   -- pending: Resume would act on the old route
   if pr_off then imgui.BeginDisabled() end
   local pr_clicked
   if compact_pr_w then pr_clicked=imgui.Button(pr_labels[pr]..'##pr',compact_pr_w,0)
@@ -456,7 +506,7 @@ local function draw_compact_rows()
   if combo_left and row_right then compact_min_w=math.max(combo_left+COMPACT_ROUTE_MIN_W,row_right)+8 end
   -- DL-018 (developer, 2026-10-02): compact Start always starts at the nearest valid waypoint, ignoring the
   -- full-view start method and waypoint.
-  if start_clicked then runner:start_nearest(mq.gettime()) end
+  if start_clicked and ensure_loaded() then runner:start_nearest(mq.gettime()) end
   if pr_clicked then
     if pr=='pause' then runner:pause() elseif pr=='resume' then runner:resume(mq.gettime()) end
   end
@@ -530,7 +580,7 @@ local function draw()
     route_selector()
     if imgui.Button('Refresh Routes') then
       if runner and (runner.status=='Running' or runner.status=='Recovering' or runner.status=='Waiting for combat') then notice='Pause or Stop before refreshing routes.'
-      else refresh_routes(); load_route() end
+      else refresh_routes(); apply_zone() end
     end
     imgui.SameLine(); if imgui.Button('Open Editor') then mq.cmd('/lua run PTAR/PTAREditor') end
     imgui.TextWrapped(notice)
@@ -538,17 +588,25 @@ local function draw()
       imgui.Separator()
       imgui.Text('Status: '..runner.status)
       imgui.TextWrapped(runner.message)
-      local chosen=route.waypoints[runner.selected]
+      local pending=route_pending()
       local current=runner.index and route.waypoints[runner.index]
       imgui.Text('Current: '..(current and string.format('#%d %s',runner.index,current.label) or 'none'))
-      local label=string.format('#%d %s [%s, %s]',runner.selected,chosen.label,chosen.type,chosen.id)
       imgui.AlignTextToFramePadding(); imgui.Text('Selected waypoint'); imgui.SameLine()
-      if imgui.BeginCombo('##runner_start_waypoint',label) then
-        for i,w in ipairs(route.waypoints) do
-          local entry=string.format('#%d %s [%s, %s]',i,w.label,w.type,w.id)
-          if imgui.Selectable(entry..'##'..w.id,runner.selected==i) then runner.selected=i end
+      if pending then
+        -- DL-021: the displayed route is not loaded yet, so the old route's waypoints are not shown.
+        imgui.BeginDisabled()
+        if imgui.BeginCombo('##runner_start_waypoint',filename and 'Waypoints load when you select or Start this route.' or 'No routes available for this zone') then imgui.EndCombo() end
+        imgui.EndDisabled()
+      else
+        local chosen=route.waypoints[runner.selected]
+        local label=string.format('#%d %s [%s, %s]',runner.selected,chosen.label,chosen.type,chosen.id)
+        if imgui.BeginCombo('##runner_start_waypoint',label) then
+          for i,w in ipairs(route.waypoints) do
+            local entry=string.format('#%d %s [%s, %s]',i,w.label,w.type,w.id)
+            if imgui.Selectable(entry..'##'..w.id,runner.selected==i) then runner.selected=i end
+          end
+          imgui.EndCombo()
         end
-        imgui.EndCombo()
       end
       -- While PTAR is setting TAC (DL-013) or mid-traversal (DL-001), Start/Resume are unavailable;
       -- Pause and Stop stay enabled. Both `busy` reasons are read fresh from runner state every frame -- never
@@ -564,9 +622,10 @@ local function draw()
       elseif traversal_busy then
         imgui.TextColored(1,0.8,0.2,1,'PTAR is mid-traversal ('..tostring(runner.phase)..'). Starting or resuming is unavailable until this phase completes. Pause and Stop still work.')
       end
-      if busy then imgui.BeginDisabled() end
+      local start_off=busy or filename==nil      -- DL-021: no displayed route means Start is unavailable
+      if start_off then imgui.BeginDisabled() end
       local start_clicked=imgui.Button('Start')
-      if busy then imgui.EndDisabled() end
+      if start_off then imgui.EndDisabled() end
       imgui.SameLine()
       local start_labels={selected='At Selected Waypoint',beginning='At Beginning Waypoint',nearest='At Nearest Valid Waypoint'}
       imgui.SetNextItemWidth(220)
@@ -576,12 +635,16 @@ local function draw()
         end
         imgui.EndCombo()
       end
-      if start_clicked then do_start() end
+      if pending then
+        imgui.TextColored(0.6,0.6,0.6,1,'Until the route loads, "At Selected Waypoint" starts at its first waypoint.')
+      end
+      if start_clicked and ensure_loaded() then do_start() end
       if imgui.Button('Pause') then runner:pause() end
       imgui.SameLine()
-      if busy then imgui.BeginDisabled() end
+      local resume_off=busy or pending           -- pending: Resume would act on the old route
+      if resume_off then imgui.BeginDisabled() end
       local resume_clicked=imgui.Button('Resume at nearest valid')
-      if busy then imgui.EndDisabled() end
+      if resume_off then imgui.EndDisabled() end
       if resume_clicked then runner:resume(mq.gettime()) end
       imgui.SameLine(); if imgui.Button('Stop') then runner:stop() end
       imgui.TextWrapped('Start uses the selected method and restarts the route. Resume finds the nearest reachable waypoint.')
@@ -619,7 +682,6 @@ local function draw()
 end
 
 local settings=settings_mod.read(paths.config,identity)
-if settings.last_route then filename=settings.last_route end
 if settings.door_role then door_role=settings.door_role end
 if settings.mode then mode=settings.mode end
 if settings.view then view=settings.view end
@@ -628,8 +690,7 @@ if settings.seen_mode_notice then seen_mode_notice=settings.seen_mode_notice end
 local echo_default=settings.echo_enabled
 if echo_default==nil then echo_default=version.is_test() end
 diag:set_echo(echo_default,snapshot)
-refresh_routes()
-if filename then load_route() end
+refresh_routes()   -- DL-021: the zone watcher below picks and loads the zone's default once the zone is known
 log('AutoRoute session started (build '..version.VERSION..', view '..view..'); log '..diag:path())
 mq.imgui.init('PTAutoRoute',draw)
 local next_snapshot=0
@@ -640,6 +701,22 @@ while running do
     local now=mq.gettime()
     check_medbreak_stood(now)
     if runner then runner:tick(now) end
+    -- DL-021: watch the zone. Only a non-empty zone that differs from the last known good one is a change; an
+    -- unavailable reading changes nothing. No debounce (Protocol 15): the log shows whether the reading flickers.
+    local zone=adapter.zone()
+    local zone_event=zone_select.zone_event(zone,current_zone)
+    if zone_event=='unavailable' then
+      if current_zone~=nil and not zone_unavailable then zone_unavailable=true; log('Zone reading unavailable') end
+    else
+      zone_unavailable=false
+      if zone_event=='changed' then
+        log('Zone changed: '..(current_zone or '(none)')..' -> '..zone)
+        current_zone=zone
+        apply_zone()
+      end
+    end
+    if zone_deferred and not (runner and (runner.status=='Running' or runner.status=='Recovering'
+      or runner.status=='Waiting for combat' or runner.status=='Waiting for med break')) then apply_zone() end
     -- DL-010: HERE is sent only while actively trying to complete the route (the rule lives in the runner, so
     -- it is unit-tested), so an errored/paused/stopped/completed/dead client drops out of every barrier quickly.
     -- DL-017: never sent at all in Solo mode -- it exists solely to facilitate Group-mode coordination.

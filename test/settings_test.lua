@@ -100,12 +100,13 @@ test('DL-018 req 9: an invalid view value on disk is rejected, not trusted as-is
   expect.equal(Settings.read(dir, identity).view, nil)
 end)
 
-test('DL-018 req 9/8: saving view leaves the other settings (mode, door_role, last_route) intact', function()
+-- DL-021 build 2 (developer-approved supersession, 2026-10-02): the legacy last_route is no longer persisted, so this
+-- test no longer expects it to round-trip; it still guards that saving the view leaves the other settings intact.
+test('DL-018 req 9/8: saving view leaves the other settings (mode, door_role) intact', function()
   local dir = T.with_temp_dir()
-  Settings.save(dir, identity, { last_route = 'PTAR_X.lua', door_role = 'secondary', mode = 'group', view = 'compact' })
+  Settings.save(dir, identity, { door_role = 'secondary', mode = 'group', view = 'compact' })
   local s = Settings.read(dir, identity)
   expect.equal(s.view, 'compact'); expect.equal(s.mode, 'group'); expect.equal(s.door_role, 'secondary')
-  expect.equal(s.last_route, 'PTAR_X.lua')
 end)
 
 -- ================================================================ DL-021 build 1 (per-zone remembered route)
@@ -161,11 +162,37 @@ test('DL-021: malformed zone_route lines (no file, bad escape, unacceptable file
   expect.equal(n, 1)
 end)
 
-test('DL-021 build 1: last_route, door_role and mode still round-trip beside zone_routes (startup unchanged)', function()
+test('DL-021 build 2: door_role and mode still round-trip beside zone_routes', function()
   local dir = T.with_temp_dir()
-  Settings.save(dir, identity, { last_route = 'PTAR_Last.lua', door_role = 'secondary', mode = 'group',
-    zone_routes = { sleeper = 'PTAR_A.lua' } })
+  Settings.save(dir, identity, { door_role = 'secondary', mode = 'group', zone_routes = { sleeper = 'PTAR_A.lua' } })
   local s = Settings.read(dir, identity)
-  expect.equal(s.last_route, 'PTAR_Last.lua'); expect.equal(s.door_role, 'secondary'); expect.equal(s.mode, 'group')
+  expect.equal(s.door_role, 'secondary'); expect.equal(s.mode, 'group')
   expect.equal(s.zone_routes.sleeper, 'PTAR_A.lua')
+end)
+
+-- Developer decision, 2026-10-02 (DL-021 open item 8): the legacy single last_route is ignored and removed on the
+-- next settings save; it never seeds or influences per-zone defaults. (This supersedes build 1's test that it
+-- still round-tripped; build 1 deliberately kept it so startup stayed coherent.)
+test('DL-021 build 2: a legacy last_route line in an existing settings file is ignored on read', function()
+  local dir = T.with_temp_dir()
+  local f = assert(io.open(Settings.path(dir, identity), 'w'))
+  f:write('last_route=PTAR_Old.lua\nmode=solo\nzone_route=sleeper PTAR_A.lua\n')
+  f:close()
+  local s = Settings.read(dir, identity)
+  expect.equal(s.last_route, nil)
+  expect.equal(s.mode, 'solo')
+  expect.equal(s.zone_routes.sleeper, 'PTAR_A.lua')
+end)
+
+test('DL-021 build 2: saving never writes last_route, so a legacy value is dropped on the next save', function()
+  local dir = T.with_temp_dir()
+  local f = assert(io.open(Settings.path(dir, identity), 'w'))
+  f:write('last_route=PTAR_Old.lua\nmode=solo\n')
+  f:close()
+  local s = Settings.read(dir, identity)
+  s.last_route = 'PTAR_Old.lua'                     -- even if a caller still hands it back
+  Settings.save(dir, identity, s)
+  local text = assert(io.open(Settings.path(dir, identity), 'r')):read('*a')
+  expect.equal(text:find('last_route', 1, true), nil)
+  expect.equal(Settings.read(dir, identity).mode, 'solo')
 end)

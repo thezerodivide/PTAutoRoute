@@ -26,6 +26,15 @@ local function names(dir)
   return list
 end
 M.names=names
+-- True when the route has something to finish on: a Finish waypoint, a Manual handoff, or a finishing door.
+function M.has_endpoint(route)
+  if type(route)~='table' or type(route.waypoints)~='table' or #route.waypoints==0 then return false end
+  for _,w in ipairs(route.waypoints) do
+    if w.type=='finish' or w.manual_handoff or w.door_after=='finish_open' or w.door_after=='finish_zone' then return true end
+  end
+  return false
+end
+local function readable(text) return type(text)=='string' and text~='' and text or nil end
 function M.scan(dir)
   local list={}
   for _,name in ipairs(names(dir)) do
@@ -33,11 +42,16 @@ function M.scan(dir)
     if route then
       local errors=data.validate(route)
       if #errors==0 then
-        list[#list+1]={file=name,name=route.route_name,zone=route.zone_short_name,
+        list[#list+1]={file=name,name=route.route_name,zone=route.zone_short_name,incomplete=not M.has_endpoint(route),
           label=string.format('%s [%s] — %s',route.route_name,route.zone_short_name,name)}
       else err=table.concat(errors,'; ') end
     end
-    if err then list[#list+1]={file=name,label=name..' [invalid: '..tostring(err)..']',error=tostring(err)} end
+    if err then
+      -- DL-021: a route that parsed but failed validation keeps its readable name and zone, so the Runner can
+      -- still place it; an unreadable file has neither.
+      list[#list+1]={file=name,label=name..' [invalid: '..tostring(err)..']',error=tostring(err),
+        name=route and readable(route.route_name) or nil,zone=route and readable(route.zone_short_name) or nil}
+    end
   end
   table.sort(list,function(a,b) return a.file:lower()<b.file:lower() end)
   return list
