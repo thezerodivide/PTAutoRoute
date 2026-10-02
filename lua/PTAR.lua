@@ -10,6 +10,7 @@ local combat=require('PTAR.PTARCombat')
 local path_setup=require('PTAR.PTARPaths')
 local version=require('PTAR.PTARVersion')
 local settings_mod=require('PTAR.PTARSettings')
+local notice_mod=require('PTAR.PTARNotice')
 local tac_module=require('PTAR.PTARTac')
 local barrier_module=require('PTAR.PTARBarrier')
 local door_match=require('PTAR.PTARDoorMatch')
@@ -20,7 +21,7 @@ local door_role='primary'
 -- DL-017: Solo is the default for every installation, new or existing -- Group mode is currently beta. The
 -- one-time notice modal's job is proof of notice, not enforcement (nothing forces the user to read it).
 local mode='solo'
-local seen_mode_notice=false
+local show_mode_notice=false   -- DL-023: decided at startup from the shared PTAR_Notice.txt; cleared once dismissed this session
 -- DL-021: the route file loaded into the runner (not necessarily the dropdown's selection) and, per starting zone
 -- exactly as stored, the route a run last executed.
 local loaded_file=nil
@@ -63,7 +64,7 @@ local function log(message)
 end
 local function save_settings()
   local ok,err=settings_mod.save(paths.config,identity,{echo_enabled=diag.echo,door_role=door_role,
-    mode=mode,seen_mode_notice=seen_mode_notice,view=view,zone_routes=zone_routes})
+    mode=mode,view=view,zone_routes=zone_routes})
   if not ok then log('Settings save failed: '..tostring(err)) end
 end
 mq.event('ptar_door_open',"#1# tells the group, '#2#'",function(line,sender,message)
@@ -494,11 +495,12 @@ end
 -- or dropdown width.
 local function draw_compact_rows()
   local combo_left=route_selector(true)
-  if not runner then return end
-  imgui.Text('Status: '..runner.status)
-  local busy=runner:tac_busy() or runner:traversal_blocking()
-  local pending=route_pending()
-  local start_off=busy or filename==nil      -- DL-021: no displayed route (none for this zone) means Start is unavailable
+  -- DL-018 req 2: the row with Full Mode always draws. With no runner (no route loaded, e.g. a zone with no routes at
+  -- startup) the status reads "No route loaded" and Start, Pause/Resume and Stop are unavailable.
+  imgui.Text('Status: '..(runner and runner.status or 'No route loaded'))
+  local busy=runner and (runner:tac_busy() or runner:traversal_blocking())
+  local pending=runner and route_pending()
+  local start_off=busy or filename==nil or not runner      -- DL-021: no displayed route (none for this zone) means Start is unavailable
   if start_off then imgui.BeginDisabled() end
   local start_clicked=imgui.Button('Start')
   if start_off then imgui.EndDisabled() end
@@ -513,7 +515,7 @@ local function draw_compact_rows()
     end
   end
   imgui.SameLine()
-  local pr=runner:pause_resume_state()
+  local pr=runner and runner:pause_resume_state() or 'disabled'
   local pr_labels={pause='Pause',resume='Resume',disabled='Pause/Resume'}
   local pr_off=(pr=='disabled') or (pr=='resume' and (busy or pending))   -- pending: Resume would act on the old route
   if pr_off then imgui.BeginDisabled() end
@@ -521,17 +523,20 @@ local function draw_compact_rows()
   if compact_pr_w then pr_clicked=imgui.Button(pr_labels[pr]..'##pr',compact_pr_w,0)
   else pr_clicked=imgui.Button(pr_labels[pr]..'##pr') end
   if pr_off then imgui.EndDisabled() end
-  imgui.SameLine(); local stop_clicked=imgui.Button('Stop')
+  imgui.SameLine()
+  if not runner then imgui.BeginDisabled() end
+  local stop_clicked=imgui.Button('Stop')
+  if not runner then imgui.EndDisabled() end
   imgui.SameLine(); local full_clicked=imgui.Button('Full Mode')
   local _,row_right=last_item_extent()
   if combo_left and row_right then compact_min_w=math.max(combo_left+COMPACT_ROUTE_MIN_W,row_right)+8 end
   -- DL-018 (developer, 2026-10-02): compact Start always starts at the nearest valid waypoint, ignoring the
   -- full-view start method and waypoint.
-  if start_clicked and ensure_loaded() then runner:start_nearest(mq.gettime()) end
+  if start_clicked and runner and ensure_loaded() then runner:start_nearest(mq.gettime()) end
   if pr_clicked then
     if pr=='pause' then runner:pause() elseif pr=='resume' then runner:resume(mq.gettime()) end
   end
-  if stop_clicked then runner:stop() end
+  if stop_clicked and runner then runner:stop() end
   if full_clicked then set_view('full') end
 end
 local function draw_compact()
@@ -556,9 +561,10 @@ local function draw()
   local open,visible=imgui.Begin('Project Triune AutoRoute v'..version.VERSION..'###Project Triune AutoRoute',true)
   if open==false then running=false end
   if visible then
-    -- DL-017: shown once, ever, regardless of which mode is chosen. Proof of notice, not enforcement -- nothing
-    -- forces the user to read it, per the developer's own framing ("we can only give you the information").
-    if not seen_mode_notice then imgui.OpenPopup('Mode Notice') end
+    -- DL-017/DL-023: shown at startup until acknowledged once per computer for this major.minor version, regardless of
+    -- which mode is chosen. Proof of notice, not enforcement -- nothing forces the user to read it, per the developer's
+    -- own framing ("we can only give you the information").
+    if show_mode_notice then imgui.OpenPopup('Mode Notice') end
     -- A popup with no size set rendered as a narrow strip live (2026-10-02). Popups are not saved to the ini, so
     -- FirstUseEver (already used for the main window) applies on every open.
     -- Centered on the game window using ImGui.GetIO().DisplaySize, the same read TAC's own windows use; falls back
@@ -577,7 +583,10 @@ local function draw()
       imgui.TextWrapped('Group mode is currently in beta and can still behave unexpectedly in some situations. Solo mode is the default and the most reliable option.')
       imgui.TextWrapped('This setting is local to this character only. It never affects any other PTAR instance -- each one sets its own mode independently.')
       if imgui.Button('Got it') then
-        seen_mode_notice=true; save_settings()
+        show_mode_notice=false   -- closed for this session even if the save below fails; it shows again next run then
+        local saved,save_err=notice_mod.save(paths.config,version.VERSION)
+        if saved then log('Mode notice acknowledged and saved: '..notice_mod.path(paths.config)..' now records '..version.VERSION)
+        else log('Mode notice acknowledged but NOT saved ('..tostring(save_err)..'); it will show again next run') end
         imgui.CloseCurrentPopup()
       end
       imgui.EndPopup()
@@ -707,10 +716,19 @@ if settings.door_role then door_role=settings.door_role end
 if settings.mode then mode=settings.mode end
 if settings.view then view=settings.view end
 if settings.zone_routes then zone_routes=settings.zone_routes end
-if settings.seen_mode_notice then seen_mode_notice=settings.seen_mode_notice end
 local echo_default=settings.echo_enabled
 if echo_default==nil then echo_default=version.is_test() end
 diag:set_echo(echo_default,snapshot)
+do
+  local record=notice_mod.read(paths.config)
+  local show,reason=notice_mod.decide(record,version.VERSION)
+  show_mode_notice=show
+  log('Mode notice '..(show and 'will show' or 'skipped')..': '..reason)
+  if settings.dropped_notice_flag then
+    log('Removed the old per-character seen_mode_notice from the character settings file (DL-023)')
+    save_settings()
+  end
+end
 refresh_routes()   -- DL-021: the zone watcher below picks and loads the zone's default once the zone is known
 log('AutoRoute session started (build '..version.VERSION..', view '..view..'); log '..diag:path())
 mq.imgui.init('PTAutoRoute',draw)

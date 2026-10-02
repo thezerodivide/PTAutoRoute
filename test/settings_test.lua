@@ -1,4 +1,4 @@
--- Requirement tests for PTARSettings' new DL-017 fields (mode, seen_mode_notice). No MacroQuest dependency, so
+-- Requirement tests for PTARSettings' new DL-017 fields (mode; seen_mode_notice was removed by DL-023). No MacroQuest dependency, so
 -- this uses real temp directories, the same pattern as PTARRouteData's own tests.
 local T = require 'harness.t'
 local test, expect = T.test, T.expect
@@ -35,22 +35,57 @@ test('DL-017: an invalid mode value on disk is rejected, not trusted as-is (same
   expect.equal(Settings.read(dir, identity).mode, nil)
 end)
 
-test('DL-017: seen_mode_notice=true round-trips through save and read', function()
-  local dir = T.with_temp_dir()
-  Settings.save(dir, identity, { seen_mode_notice = true })
-  expect.equal(Settings.read(dir, identity).seen_mode_notice, true)
-end)
+-- DL-023 criterion 5 (developer-approved 2026-10-02): the per-character seen_mode_notice has no effect and is removed from
+-- the character's file. These replace the three DL-017 round-trip tests, whose expected values the developer changed.
+local function raw_settings(dir, text)
+  local f = assert(io.open(Settings.path(dir, identity), 'wb')); f:write(text); f:close()
+end
+local function file_text(dir)
+  local f = assert(io.open(Settings.path(dir, identity), 'rb')); local s = f:read('*a'); f:close(); return s
+end
 
-test('DL-017: seen_mode_notice is nil (not false) when never saved, so the modal shows on first run', function()
+test('DL-023 crit 5: an old seen_mode_notice=true in a character file is ignored on read, and the read says it was found', function()
   local dir = T.with_temp_dir()
+  raw_settings(dir, 'mode=group\nseen_mode_notice=true\n')
   local settings = Settings.read(dir, identity)
   expect.equal(settings.seen_mode_notice, nil)
+  expect.equal(settings.dropped_notice_flag, true)
+  expect.equal(settings.mode, 'group')   -- the rest of the file is still honored
 end)
 
-test('DL-017: seen_mode_notice=false is stored distinctly from never having been set, and still round-trips', function()
+test('DL-023 crit 5: an old seen_mode_notice=false is ignored and reported the same way', function()
   local dir = T.with_temp_dir()
-  Settings.save(dir, identity, { seen_mode_notice = false })
-  expect.equal(Settings.read(dir, identity).seen_mode_notice, false)
+  raw_settings(dir, 'seen_mode_notice=false\n')
+  local settings = Settings.read(dir, identity)
+  expect.equal(settings.seen_mode_notice, nil)
+  expect.equal(settings.dropped_notice_flag, true)
+end)
+
+test('DL-023 crit 5: a file without the old key does not report one', function()
+  local dir = T.with_temp_dir()
+  raw_settings(dir, 'mode=solo\n')
+  expect.equal(Settings.read(dir, identity).dropped_notice_flag, nil)
+  expect.equal(Settings.read(T.with_temp_dir(), identity).dropped_notice_flag, nil)
+end)
+
+test('DL-023 crit 5: saving after reading removes the old key from the character file and keeps everything else', function()
+  local dir = T.with_temp_dir()
+  raw_settings(dir, 'echo_enabled=true\nmode=group\nseen_mode_notice=true\n')
+  local s = Settings.read(dir, identity)
+  expect.equal(Settings.save(dir, identity, s), true)
+  local text = file_text(dir)
+  expect.equal(text:find('seen_mode_notice', 1, true), nil)
+  local after = Settings.read(dir, identity)
+  expect.equal(after.mode, 'group')
+  expect.equal(after.echo_enabled, true)
+  expect.equal(after.dropped_notice_flag, nil)
+end)
+
+test('DL-023 crit 5: a save never writes seen_mode_notice, even if a caller still passes it', function()
+  local dir = T.with_temp_dir()
+  Settings.save(dir, identity, { mode = 'solo', seen_mode_notice = true })
+  expect.equal(file_text(dir):find('seen_mode_notice', 1, true), nil)
+  expect.equal(Settings.read(dir, identity).seen_mode_notice, nil)
 end)
 
 test('DL-017: mode and door_role are independent -- saving one does not disturb the other (switching modes preserves Group settings)', function()
@@ -66,13 +101,12 @@ test('DL-017: all settings round-trip together (realistic full save), mirroring 
   local dir = T.with_temp_dir()
   Settings.save(dir, identity, {
     last_route = nil, echo_enabled = true, door_role = 'primary',
-    mode = 'group', seen_mode_notice = true,
+    mode = 'group',
   })
   local settings = Settings.read(dir, identity)
   expect.equal(settings.echo_enabled, true)
   expect.equal(settings.door_role, 'primary')
   expect.equal(settings.mode, 'group')
-  expect.equal(settings.seen_mode_notice, true)
 end)
 
 test('DL-018 req 9: a fresh directory reads view as nil (caller applies the full-view default)', function()

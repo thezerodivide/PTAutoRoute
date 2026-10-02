@@ -40,9 +40,10 @@ function M.read(dir,identity)
   if settings.door_role~='primary' and settings.door_role~='secondary' then settings.door_role=nil end
   if settings.mode~='solo' and settings.mode~='group' then settings.mode=nil end
   if settings.view~='full' and settings.view~='compact' then settings.view=nil end
-  if settings.seen_mode_notice=='true' then settings.seen_mode_notice=true
-  elseif settings.seen_mode_notice=='false' then settings.seen_mode_notice=false
-  else settings.seen_mode_notice=nil end
+  -- DL-023: the per-character notice flag is ignored; the shared PTAR_Notice.txt replaced it. Reported so the Runner can
+  -- re-save this file once and remove the key.
+  if settings.seen_mode_notice~=nil then settings.dropped_notice_flag=true end
+  settings.seen_mode_notice=nil
   return settings
 end
 function M.save(dir,identity,settings)
@@ -52,7 +53,6 @@ function M.save(dir,identity,settings)
   if settings.door_role=='primary' or settings.door_role=='secondary' then lines[#lines+1]='door_role='..settings.door_role end
   if settings.mode=='solo' or settings.mode=='group' then lines[#lines+1]='mode='..settings.mode end
   if settings.view=='full' or settings.view=='compact' then lines[#lines+1]='view='..settings.view end
-  if settings.seen_mode_notice~=nil then lines[#lines+1]='seen_mode_notice='..tostring(settings.seen_mode_notice) end
   local zones={}
   for zone,file in pairs(settings.zone_routes or {}) do
     if type(zone)=='string' and zone~='' and files.accept(file) then zones[#zones+1]=zone end
