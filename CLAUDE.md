@@ -57,7 +57,7 @@ If new evidence contradicts the current design, stop and explain the conflict be
 
 **Stop conditions (§12).** Stop incremental patching and re-baseline against the spec if: implemented behavior turns out to differ from what was agreed; it's unclear whether something is a requirement or an implementation choice; an earlier agreement had to be quoted back because it was misremembered; tests pass but live behavior keeps contradicting expectations; logs can't explain observed behavior; several consecutive builds are fixes for the previous fix; or the implementation has become more complicated than the problem warrants.
 
-## Before building (added 2026-10-02, developer-approved; evidence: lessons L-032, L-034)
+## Before building (added 2026-10-02, developer-approved; evidence: lessons L-032, L-034; item 5 added the same day)
 
 Added because the protocol's "implementation choice" has no operational test and I kept treating "the approved text doesn't say" as "free to decide", then disclosing afterwards. The protocol itself is unchanged; amending it is the developer's call at a retrospective.
 
@@ -74,6 +74,8 @@ Any entry other than "none" means stop and ask the developer *before* building. 
 **3. Source label on every decision-log entry.** Each decision, change or requirement is labeled exactly one of: **developer-directed** (date), **Claude-proposed, developer-approved** (date), or **Claude-decided, OPEN**. Never put a "developer direction" or "confirmed" header over mixed content. A developer reaction to a whole build ("Perfect") approves what was shown and raised, not choices I never raised. If something was my oversight, the log says so.
 
 **4. Sweep after every build or confirmation.** Refresh the affected DL entry's Status line (build, test count, live vs local), the ledger (Pending Live Verification, Up next), inline markers on any requirement the developer changed, and any stated live confirmation. `CLAUDE.md`'s module/phase/status lists too when code structure changes.
+
+**5. After chat compaction (developer-directed wording, 2026-10-02).** After chat compaction, before resuming work, reread CLAUDE.md, the applicable Development Protocol sections, and the current decision-log and ledger entries. Reconcile the summary against those sources, preserving approved requirements, unresolved decisions, and verification status. Briefly report completion and any discrepancies. Do not treat a compaction summary as evidence of user approval or attribute a decision to the user without a recorded basis.
 
 ## Architecture
 
