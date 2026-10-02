@@ -615,3 +615,13 @@ Entries are ordered oldest first. New entries append at the bottom.
 - **Evidence before the fix:** the stubbed run reproduced the screenshot (Route dropdown only; clicking Full Mode impossible). After the fix: all five elements draw, and a Full Mode click logs `View set to full` and switches to the full layout.
 - **Live check (done, developer-reported):** start in compact view in a zone with no routes; the status row and a working Full Mode button appear; click Full Mode.
 
+
+### DL-024 — Scan the PTAR config folder for route files and add them to the route list
+
+- **Status:** Requirements conversation in progress, 2026-10-02. **Nothing designed or built.** Required for v1.1.0 (developer-directed); the withdrawn v1.1.0 candidate is `dd40023`.
+- **Story (developer's words, 2026-10-02):** the Lua should be able to scan the folder for routes and add them to `PTAR_Routes.txt`, so a route file copied in by hand needs no manual registration.
+- **Observed / confirmed facts (read 2026-10-02):** both Refresh Routes buttons only re-read `PTAR_Routes.txt` (`PTARFiles.scan`); only the Editor's Create Route and Register Existing File add entries (`files.add`, which refuses a file that does not load and validate), and Delete Route removes one. Lua has no standard directory listing. From the developer's MQClaudeTestBridge spikes 11/12 and TAC's source: `require('lfs')` (LuaFileSystem 1.9.0) works inside MacroQuest, `lfs.dir` lists a folder in about 1 ms, `io.popen` took 5,360 ms and froze the client, `lfs.dir` returns `.` and `..` and zero names for a missing path or file path, `lfs.attributes(path,'mode')` tells files from folders; TAC and Triune call `pcall(require,'lfs')` and degrade when it is missing. **Not established:** that every user's machine has `lfs` (the bridge calls it a per-machine dependency; nothing found in the Triune package installs it). MQ's online docs were not consulted. The Runner and the Editor are separate Lua processes that both read the same index file.
+- **Requirement (each item developer-directed, 2026-10-02):**
+  1. PTAR scans the `config\PTAR\` folder for route files and adds the ones it finds to `PTAR_Routes.txt`.
+  2. The scan runs **at startup and on Refresh Routes, in both the Runner and the Editor** (developer chose option C).
+- **Open (one at a time):** which files get added (name rule; valid routes only or invalid ones too; `.bak`/`.tmp`); what PTAR does when `lfs` is missing; what the user sees when files are added; whether index entries for files that no longer exist are touched; the Runner and Editor both writing the index; acceptance criteria.
