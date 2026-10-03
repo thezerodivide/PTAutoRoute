@@ -272,7 +272,13 @@ Each item below records the agreed behavior at requirement level; the decision l
 
 - The Editor can delete the selected route after a confirmation popup. The index entry is removed first, then the route file and its `.bak` and `.tmp`; failures and partial failures are reported, never shown as success. Deletion never touches a Runner: a loaded runner keeps its in-memory route, and the Runner's list updates on Refresh Routes. Supersedes the originally proposed in-use restriction and automatic Runner refresh.
 
-### 22.6 Verification state at v1.1.0
+### 22.6 Route folder scan — [DL-024](decision_log.md#dl-024--scan-the-ptar-config-folder-for-route-files-and-add-them-to-the-route-list)
+
+- The Runner and the Editor scan the PTAR config folder for route files and add the ones not yet in `PTAR_Routes.txt`, at startup and on Refresh Routes only. Every file matching the PTAR naming rule is added, valid or not; existing entries are never edited or removed; route files are never touched; the index is written atomically.
+- The folder is listed with LuaFileSystem (`lfs`), loaded with `pcall(require, 'lfs')`; without it the scan is skipped with an on-screen notice and `io.popen` is not used. Not established: that every user's machine has `lfs`.
+- Messages (developer-approved wording): files added, index write failed, `lfs` missing. A route file that Delete Route could not delete is added back by the next scan.
+
+### 22.7 Verification state at v1.1.0
 
 Live-verified: Solo mode and the first-run notice, the TAC Med Break pause and resume (including the end-of-break fallback), combat/med-break hold in Solo, the compact view, the zone-filtered selector with its pending, restore, no-routes and invalid-entry behavior, per-zone remembering, and route deletion (cancel, confirm, loaded-route unload, success message). **Not live-tested:** Group mode's group-only behavior (four items: the multi-character barrier deferral during a groupmate's med break, a med break during a barrier wait, Group mode's chat actually being sent on this build, and the Group barrier hold when combat and a med break overlap); the zone-update deferral branch (unit-tested only); and the delete failure messages (covered by real-failure tests, not exercised in the game).
 

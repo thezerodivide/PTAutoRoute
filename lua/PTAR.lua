@@ -331,7 +331,26 @@ local function snapshot()
     combat_state.slots and tostring(combat_state.slots) or 'unavailable',tostring(combat_state.active),
     table.concat(combat_state.entries,', '),target)
 end
-local function refresh_routes()
+-- DL-024: scan the config folder for route files and add them to the route list. Only at startup and on the Refresh Routes
+-- button. Without LuaFileSystem the scan is skipped. Returns the notice to show for the scan, or nil (nothing to say, or a
+-- folder that could not be listed, which is only logged).
+local lfs_loaded,lfs_module=pcall(require,'lfs')
+local folder_lister=lfs_loaded and type(lfs_module)=='table' and files.make_lister(lfs_module) or nil
+local function scan_route_folder()
+  if not folder_lister then
+    log('Route folder scan: skipped: LuaFileSystem (lfs) is not available: '..tostring(lfs_module):match('^[^\n]*'))
+    return files.LFS_MISSING_RUNNER
+  end
+  local result=files.discover(paths.config,folder_lister)
+  for _,line in ipairs(files.discover_log_lines(result,paths.config)) do log(line) end
+  if result.status=='write_failed' then return files.write_failed_message(result.error) end
+  if result.status=='ok' then return files.added_message(result.added) end
+  return nil
+end
+-- `scan` is true only at startup and from the Refresh Routes button; every other call just re-reads the list. Returns the scan's
+-- notice, which the caller posts after everything else it does (a route load would otherwise replace it at once).
+local function refresh_routes(scan)
+  local scan_notice=scan and scan_route_folder() or nil
   local found,err=files.scan(paths.config)
   if not found then notice='Could not scan config routes: '..tostring(err); log(notice); return end
   choices=found
@@ -343,6 +362,7 @@ local function refresh_routes()
     end
   end
   log('Route scan: '..#choices..' candidates')
+  return scan_notice
 end
 local function load_route()
   -- Every refusal sets the notice and is logged with its cause (logging standard: failures and their causes).
@@ -610,7 +630,7 @@ local function draw()
     route_selector()
     if imgui.Button('Refresh Routes') then
       if runner and (runner.status=='Running' or runner.status=='Recovering' or runner.status=='Waiting for combat') then notice='Pause or Stop before refreshing routes.'
-      else refresh_routes(); apply_zone() end
+      else local scan_notice=refresh_routes(true); apply_zone(); if scan_notice then notice=scan_notice end end
     end
     imgui.SameLine(); if imgui.Button('Open Editor') then mq.cmd('/lua run PTAR/PTAREditor') end
     imgui.TextWrapped(notice)
@@ -729,7 +749,8 @@ do
     save_settings()
   end
 end
-refresh_routes()   -- DL-021: the zone watcher below picks and loads the zone's default once the zone is known
+local startup_notice=refresh_routes(true)   -- DL-024: the first scan; DL-021: the zone watcher below picks and loads the zone's default once the zone is known
+if startup_notice then notice=startup_notice end
 log('AutoRoute session started (build '..version.VERSION..', view '..view..'); log '..diag:path())
 mq.imgui.init('PTAutoRoute',draw)
 local next_snapshot=0

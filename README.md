@@ -17,6 +17,7 @@ PTAR does not replace TAC, MQ2Nav, or any other tool. It orchestrates them for t
 - Solo mode by default; an optional Group mode (beta) coordinates door opening across a group and keeps every character within one waypoint of each other
 - Full and Compact window modes
 - Deletes a route you no longer need from the Editor
+- Finds route files you copy into the config folder and adds them to the route list for you
 - Persists your settings and your last-started route for each zone, per character/server
 - Detailed diagnostic logging always on, with an optional in-game console echo
 
@@ -83,6 +84,8 @@ A door capture needs a confirmed live target first — click **Select Nearest Do
 A ground drop or water crossing is captured in stages: departure, then ledge (if falling), then underwater target (if swimming), then exit. The same capture button walks through each stage in order.
 
 To delete a route you no longer need, pick it in **Existing route**, click **Delete Route**, and confirm in the popup. A delete is permanent: PTAR removes the route file, its `.bak` and `.tmp` copies, and its entry in the route list, and there is no undo. A Runner that already has the route loaded keeps running it from memory; click **Refresh Routes** in the Runner to update its list.
+
+To add a route someone shared with you, copy the route file into `config\PTAR\`. PTAR looks for new route files when the Runner or the Editor starts and whenever you click **Refresh Routes**, and adds any it finds to the route list. A file that isn't a usable route (still being captured, or damaged) is added too and shows as **[INVALID]**, so you can see why it can't run. This uses LuaFileSystem (`lfs`). If it isn't installed on your computer, PTAR says so in the window, and you add each file yourself with **Register Route File...** in the Editor.
 
 ## Basic Usage — Running a Route
 

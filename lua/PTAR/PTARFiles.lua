@@ -123,6 +123,85 @@ function M.delete_route(dir,name)
   result.ok=true
   return result
 end
+-- DL-024: scan the PTAR config folder for route files and add them to the index. The folder is listed by an injected
+-- `lister(dir)` (names, or nil plus a reason), so this stays MQ-free; PTAR.lua and the Editor build the real one from LuaFileSystem
+-- with make_lister. Every file that matches the PTAR route file naming rule is added, valid or not (scan then shows an invalid or
+-- incomplete one as such); nothing already in the index is edited or removed, and no route file is touched. Windows file names
+-- ignore case, so a name that differs from an indexed one only in case is the same file and counts as already listed. All new
+-- names go in with ONE atomic index write, in alphabetical order ignoring case.
+-- Result: {status ('ok'|'unlistable'|'write_failed'), added={files}, matched, listed, error}.
+function M.discover(dir,lister)
+  local result={status='ok',added={},matched=0,listed=0}
+  local listing,err=lister(dir)
+  if not listing then result.status='unlistable'; result.error=tostring(err); return result end
+  local list=names(dir)
+  local indexed={}
+  for _,existing in ipairs(list) do indexed[existing:lower()]=true end
+  local candidates,seen={},{}
+  for _,name in ipairs(listing) do
+    local key=type(name)=='string' and name:lower() or nil
+    if key and M.accept(name) and not seen[key] then
+      seen[key]=true
+      result.matched=result.matched+1
+      if indexed[key] then result.listed=result.listed+1 else candidates[#candidates+1]=name end
+    end
+  end
+  if #candidates==0 then return result end
+  table.sort(candidates,function(a,b)
+    local la,lb=a:lower(),b:lower()
+    if la~=lb then return la<lb end
+    return a<b
+  end)
+  for _,name in ipairs(candidates) do list[#list+1]=name end
+  local ok,write_err=write_index(dir,list)
+  if not ok then result.status='write_failed'; result.error=tostring(write_err); return result end
+  result.added=candidates
+  return result
+end
+-- A folder lister over LuaFileSystem (`lfs`), as observed live (MQClaudeTestBridge spikes 11 and 12): lfs.dir returns '.' and '..'
+-- and yields nothing for a missing path or a file path, so the folder is checked to be a directory first; the iterator must be
+-- called with the state lfs.dir returns. Any error raised inside lfs comes back as nil plus a message.
+function M.make_lister(lfs)
+  return function(dir)
+    local ok,listing,reason=pcall(function()
+      if lfs.attributes(dir,'mode')~='directory' then return nil,'not a directory' end
+      local out={}
+      local iter,handle=lfs.dir(dir)
+      for name in iter,handle do
+        if name~='.' and name~='..' then out[#out+1]=name end
+      end
+      return out
+    end)
+    if not ok then return nil,tostring(listing) end
+    return listing,reason
+  end
+end
+-- The approved messages (developer, 2026-10-02) and the log lines for a scan. nil when nothing was added.
+M.LFS_MISSING_RUNNER='Route folder scan unavailable: LuaFileSystem (lfs) is not installed. New route files will not be found automatically; register them in the Editor.'
+M.LFS_MISSING_EDITOR='Route folder scan unavailable: LuaFileSystem (lfs) is not installed. New route files will not be found automatically; register them with Register Route File...'
+function M.write_failed_message(err)
+  return 'Could not update the route list: '..tostring(err)..'. Refresh Routes to try again.'
+end
+function M.added_message(added)
+  if #added==0 then return nil end
+  local shown={}
+  for i=1,math.min(3,#added) do shown[i]=added[i] end
+  local list=table.concat(shown,', ')
+  if #added>3 then list=list..' and '..(#added-3)..' more' end
+  return string.format('Added %d route file%s to the route list: %s.',#added,#added==1 and '' or 's',list)
+end
+function M.discover_log_lines(result,dir)
+  if result.status=='unlistable' then
+    return {'Route folder scan: skipped: '..tostring(dir)..' could not be listed: '..tostring(result.error)}
+  end
+  local lines={string.format('Route folder scan: %s: %d matching files, %d already listed, %d added',
+    tostring(dir),result.matched,result.listed,#result.added)}
+  for _,file in ipairs(result.added) do lines[#lines+1]='Route folder scan: added '..file end
+  if result.status=='write_failed' then
+    lines[#lines+1]='Route folder scan: could not update the route list: '..tostring(result.error)..'; the next scan will try again'
+  end
+  return lines
+end
 -- The message shown in the Editor for a delete result (developer-approved wording).
 function M.delete_message(result)
   local name=tostring(result.name)

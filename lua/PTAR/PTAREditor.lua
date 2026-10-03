@@ -80,7 +80,24 @@ local function safe_filename(name)
   if not generated then return nil,err end
   return paths.config..'/'..generated
 end
-local function refresh_routes()
+-- DL-024: scan the config folder for route files and add them to the route list. Only at startup and on the Refresh Routes
+-- button (the other refresh_routes() calls do not scan). Without LuaFileSystem the scan is skipped and the notice says so.
+local lfs_loaded,lfs_module=pcall(require,'lfs')
+local folder_lister=lfs_loaded and type(lfs_module)=='table' and files.make_lister(lfs_module) or nil
+local function scan_route_folder()
+  if not folder_lister then
+    log('Route folder scan: skipped: LuaFileSystem (lfs) is not available: '..tostring(lfs_module):match('^[^\n]*'))
+    set_message(files.LFS_MISSING_EDITOR)
+    return
+  end
+  local result=files.discover(paths.config,folder_lister)
+  for _,line in ipairs(files.discover_log_lines(result,paths.config)) do log(line) end
+  if result.status=='write_failed' then set_message(files.write_failed_message(result.error))
+  elseif result.status=='ok' and #result.added>0 then set_message(files.added_message(result.added)) end
+end
+-- `scan` is true only at startup and from the Refresh Routes button; every other call just re-reads the list.
+local function refresh_routes(scan)
+  if scan then scan_route_folder() end   -- a failure below replaces the scan's message, as it should
   local found,err=files.scan(paths.config)
   if not found then set_message('Route scan failed: '..tostring(err)); return end
   existing=found
@@ -439,7 +456,7 @@ local function draw()
       imgui.EndCombo()
     end
     if imgui.Button('Load Route') then do_load() end
-    imgui.SameLine(); if imgui.Button('Refresh Routes') then refresh_routes() end
+    imgui.SameLine(); if imgui.Button('Refresh Routes') then refresh_routes(true) end
     draw_delete_controls()
     imgui.SameLine(); if imgui.Button(show_create and 'Hide New Route' or 'New Route...') then show_create=not show_create end
     if show_create then
@@ -668,7 +685,7 @@ local function draw()
   end
   imgui.End()
 end
-refresh_routes()
+refresh_routes(true)
 
 mq.imgui.init('PTAREditor',draw)
 while running do mq.delay(100) end
