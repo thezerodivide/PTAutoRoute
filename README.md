@@ -25,7 +25,7 @@ PTAR does not replace TAC, MQ2Nav, or any other tool. It orchestrates them for t
 
 PTAR is two separate scripts.
 
-The Editor records a route. It reads your character's live position, heading, and door target when asked, and writes that into a route file. It never moves you, clicks anything, targets, or fights.
+The Editor records a route. It reads your character's live position, heading, and door target when asked, and writes that into a route file. It never moves you, clicks doors, targets monsters, or fights. The only command it sends is `/doortarget`, from Select Nearest Door, to select a door so it can read the door's details.
 
 The Runner plays a saved route back. It reads waypoints in order and, for each one, either navigates there with MQ2Nav or runs the special-case logic a waypoint needs:
 

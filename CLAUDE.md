@@ -97,11 +97,11 @@ Any entry other than "none" means stop and ask the developer *before* building. 
 - **PTARNotice.lua** — the once-per-computer, per-major.minor acknowledgment of the Group-beta notice (DL-023): reads, decides and atomically saves `PTAR_Notice.txt`. MQ-free.
 - **PTARSettings.lua** — per-server/character runtime preferences (last-used route, MQ-console-echo preference, multi-box door role, Solo/Group `mode`, Full/Compact `view`, per-zone last-started routes), plain `key=value` text with the same atomic tmp/bak/promote save pattern as `PTARFiles.lua`'s route index. Runner-only; the Editor doesn't read or write it.
 - **PTARZoneSelect.lua** — pure zone-filtering decisions for the Runner's route selector (DL-021): which routes to list for a zone, the default route, and what a zone change should do. MQ-free.
-- **PTAREditor.lua** — the separate Editor process/UI for capturing routes waypoint-by-waypoint at the character's live position. Capture-only by design (it also creates, registers and deletes route files, never in-game actions): never moves the character, clicks doors, targets, or fights.
+- **PTAREditor.lua** — the separate Editor process/UI for capturing routes waypoint-by-waypoint at the character's live position. Capture-only by design (it also creates, registers and deletes route files, never other in-game actions): never moves the character, clicks doors, targets a spawn, or fights (its one game command is `/doortarget` from Select Nearest Door).
 
 ### Key design invariants (do not casually violate)
 
-- **Editor is capture-only.** It reads live position/state to record waypoints but never issues movement, door-click, targeting, or combat commands.
+- **Editor is capture-only.** It reads live position/state to record waypoints but never issues movement, door-click, spawn-targeting, or combat commands. Its one exception is `/doortarget` (Select Nearest Door), which only selects a door to read.
 - **Runner's state machine (`PTARRunnerCore.lua`) has no MQ dependency.** All actual game interaction is confined to the `adapter` table built in `PTAR.lua`. When changing runner behavior, keep this separation — don't reach into `mq.TLO`/`mq.cmd` from the state machine.
 - **Route files are pure data.** `PTARRouteData.lua`'s literal-only parser is a deliberate security/robustness boundary; don't relax it to allow executable content.
 - **Traversal waypoints (ground drop / water drop / water crossing) exist only because a segment has no navmesh coverage.** They use manual forward/vertical movement and speed/wetness-based phase detection — this manual-movement path is intentionally never used as a generic no-navmesh fallback for normal waypoints. A stalled traversal fails the leg outright rather than falling back to `/nav`.

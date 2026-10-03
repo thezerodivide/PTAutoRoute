@@ -24,7 +24,7 @@ PTAR (Project Triune AutoRoute) is a two-part Lua suite for Project Triune / Mac
 ## 2. Design Principles
 
 - Route files are pure data — a literal-only parser rejects any executable content, even in a hand-edited file.
-- The Editor never moves the character, clicks doors, targets, fights, or calls TAC — capture-only, by design.
+- The Editor never moves the character, clicks doors, targets a spawn, fights, or calls TAC — capture-only, by design. Its one game command is `/doortarget`, sent by Select Nearest Door to select a door so its details can be read. *(Wording corrected 2026-10-03: this line said the Editor never "targets", which was inaccurate for Select Nearest Door; the behavior is unchanged and is described in the door-capture requirement below.)*
 - Manual movement (forward/vertical) is scoped only to captured traversal phases, never used as a generic no-navmesh fallback.
 - Retries are scoped per named operation; bounded waits are handled separately from retries.
 - Saves are atomic: .tmp write, round-trip verify, promote to main, .bak retained.

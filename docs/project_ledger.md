@@ -68,7 +68,7 @@ Implemented code changes not yet confirmed by live testing. Check this before as
 
 Behavior actually agreed upon (source: [PTAR_Rebaseline_Spec.md](PTAR_Rebaseline_Spec.md), approved as current source of truth).
 
-- Two-part suite: Editor (capture-only, never moves/clicks/targets/fights) and Runner (playback via MQ2Nav plus special-case handling for ground drops, water drops, water crossings, doors).
+- Two-part suite: Editor (capture-only: never moves/clicks doors/targets a spawn/fights; its one game command is `/doortarget` from Select Nearest Door) and Runner (playback via MQ2Nav plus special-case handling for ground drops, water drops, water crossings, doors).
 - Route files are pure data behind a literal-only parser; route schema changes are never auto-applied, and an unsupported `format_version` is hard-rejected, never silently edited or upgraded.
 - Saves (route data and route index) are atomic: `.tmp` write, round-trip verify, promote to main, `.bak` retained.
 - Normal nav legs: 2 retries in place, then 1 (non-retried) backtrack to the last known-good waypoint, then terminal failure. This is the only true retry-covered operation in the system; every other wait (14+ across nav/drops/water/doors/combat) is a bounded wait, not a retry.
